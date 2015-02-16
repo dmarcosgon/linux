@@ -24,6 +24,24 @@ config SND_SOC_ADV7511_HDMI
 	tristate "ADV7511 HDMI transmitter sound support"
 	depends on SND_SOC_ADI
 	select SND_SOC_ADI_AXI_SPDIF
+
+config SND_ZYBO_SOC_PCM1794A
+	tristate "SoC Audio support for PCM1794A on ZYBO"
+	depends on SND_SOC_ADI
+	select SND_SOC_PCM1794A
+	select SND_SOC_ADI_AXI_I2S
+	help
+	  Say Y or M if you want to add support for SoC audio on Zynq
+	  ZYBO board using AXI-I2S and PCM1794A.
+
+config SND_ZYBO_SOC_AT1201
+	tristate "SoC Audio support for AT1201 on ZYBO"
+	depends on SND_SOC_ADI
+	select SND_SOC_AT1201
+	select SND_SOC_ADI_AXI_I2S
+	help
+	  Say Y or M if you want to add support for SoC audio on Zynq
+	  ZYBO board using AXI-I2S and AT1201.
 		 
 config SND_SOC_ZED_ADAU1761
 	tristate "ZED board sound support"

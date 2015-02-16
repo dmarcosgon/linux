@@ -325,6 +325,9 @@ config SND_SOC_ALC5623
 config SND_SOC_ALC5632
 	tristate
 
+config SND_SOC_AT1201
+	tristate
+
 config SND_SOC_CQ0093VC
 	tristate
 
@@ -450,6 +453,9 @@ config SND_SOC_PCM1681
 config SND_SOC_PCM1792A
 	tristate "Texas Instruments PCM1792A CODEC"
 	depends on SPI_MASTER
+
+config SND_SOC_PCM1794A
+	tristate "Texas Instruments PCM1794A CODEC"
 
 config SND_SOC_PCM3008
        tristate
