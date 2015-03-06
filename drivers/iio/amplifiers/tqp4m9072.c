@@ -15,12 +15,14 @@
 #include <linux/err.h>
 #include <linux/module.h>
 #include <linux/bitrev.h>
+#include <linux/of.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
 
 struct tqp4m9072_state {
 	struct spi_device	*spi;
+	struct regulator	*reg;
 	unsigned char		attenuation;
 	/*
 	 * DMA (thus cache coherency maintenance) requires the
@@ -138,30 +140,60 @@ static int tqp4m9072_probe(struct spi_device *spi)
 
 	st = iio_priv(indio_dev);
 
+	st->reg = devm_regulator_get(&spi->dev, "vcc");
+	if (!IS_ERR(st->reg)) {
+		ret = regulator_enable(st->reg);
+		if (ret)
+			return ret;
+	}
+
 	spi_set_drvdata(spi, indio_dev);
 	st->spi = spi;
 
 	indio_dev->dev.parent = &spi->dev;
-	indio_dev->name = spi_get_device_id(spi)->name;
+
+	/* try to get a unique name */
+	if (spi->dev.platform_data)
+		indio_dev->name = spi->dev.platform_data;
+	else if (spi->dev.of_node)
+		indio_dev->name = spi->dev.of_node->name;
+	else
+		indio_dev->name = spi_get_device_id(spi)->name;
+
+		indio_dev->channels = tqp4m9072_channels;
+		indio_dev->num_channels = ARRAY_SIZE(tqp4m9072_channels);
+
 	indio_dev->info = &tqp4m9072_info;
 	indio_dev->modes = INDIO_DIRECT_MODE;
-	indio_dev->channels = tqp4m9072_channels;
-	indio_dev->num_channels = ARRAY_SIZE(tqp4m9072_channels);
+
+	ret = tqp4m9072_write(indio_dev, 0);
+	if (ret < 0)
+		goto error_disable_reg;
 
 	ret = iio_device_register(indio_dev);
 	if (ret)
-		return ret;
-
-	tqp4m9072_write(indio_dev, 0);
+		goto error_disable_reg;
 
 	return 0;
+
+error_disable_reg:
+	if (!IS_ERR(st->reg))
+		regulator_disable(st->reg);
+
+	return ret;
 }
+
 
 static int tqp4m9072_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
+	struct tqp4m9072_state *st = iio_priv(indio_dev);
+	struct regulator *reg = st->reg;
 
 	iio_device_unregister(indio_dev);
+
+	if (!IS_ERR(reg))
+		regulator_disable(reg);
 
 	return 0;
 }
