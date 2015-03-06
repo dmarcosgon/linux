@@ -1,0 +1,20 @@
+#
+# RF switches, etc.
+#
+# When adding new entries keep the list in alphabetical order
+
+menu "Switches"
+
+
+
+config MASW010350
+	tristate "Macom MASW010350 switch"
+	help
+	  Say yes here to build support for Macom MASW010350
+	  SP4T switch
+
+endmenu
+
+
+
+
