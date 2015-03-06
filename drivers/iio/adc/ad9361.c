@@ -133,6 +133,7 @@ struct ad9361_rf_phy {
 
 	bool			auto_cal_en;
 	u64			last_tx_quad_cal_freq;
+	u32			last_tx_quad_cal_phase;
 	unsigned long		flags;
 	unsigned long		cal_threshold_freq;
 	u32			current_rx_bw_Hz;
@@ -174,12 +175,12 @@ static struct ad9361_trace timestamps[5000];
 static int timestamp_cnt = 0;
 static bool timestamp_en = 0;
 
-static inline void ad9361_timestamp_en(unsigned reg, unsigned read)
+static inline void ad9361_timestamp_en(void)
 {
 	timestamp_en = true;
 }
 
-static inline void ad9361_timestamp_dis(unsigned reg, unsigned read)
+static inline void ad9361_timestamp_dis(void)
 {
 	timestamp_en = false;
 }
@@ -225,7 +226,7 @@ static inline void ad9361_print_timestamp(void)
 #endif
 
 static const char *ad9361_ensm_states[] = {
-	"sleep", "", "", "", "", "alert", "tx", "tx flush",
+	"sleep", NULL, NULL, NULL, NULL, "alert", "tx", "tx flush",
 	"rx", "rx_flush", "fdd", "fdd_flush"
 };
 
@@ -1400,13 +1401,14 @@ static int ad9361_gc_update(struct ad9361_rf_phy *phy)
 		dec_pow_meas_dur =
 			phy->pdata->gain_ctrl.f_agc_dec_pow_measuremnt_duration;
 	} else {
-
+		u32 fir_div = DIV_ROUND_CLOSEST(clkrf, clk_get_rate(phy->clks[RX_SAMPL_CLK]));
 		dec_pow_meas_dur = phy->pdata->gain_ctrl.dec_pow_measuremnt_duration;
 
-		if (((reg * 2) / dec_pow_meas_dur) < 2) {
-			dec_pow_meas_dur = reg;
+		if (((reg * 2 / fir_div) / dec_pow_meas_dur) < 2) {
+			dec_pow_meas_dur = reg / fir_div;
 		}
 	}
+
 
 	/* Power Measurement Duration */
 	ad9361_spi_writef(spi, REG_DEC_POWER_MEASURE_DURATION_0,
@@ -2040,48 +2042,61 @@ static int __ad9361_update_rf_bandwidth(struct ad9361_rf_phy *phy,
 
 /* TX QUADRATURE CALIBRATION */
 
-static int ad9361_tx_quad_phase_search(struct ad9361_rf_phy *phy, u32 rxnco_word)
+static int __ad9361_tx_quad_calib(struct ad9361_rf_phy *phy, u32 phase,
+				  u32 rxnco_word, u32 decim, u8 *res)
 {
-	int i, ret;
-	u8 field[64];
-	u32 val, start;
+		int ret;
 
-	dev_dbg(&phy->spi->dev, "%s", __func__);
-
-	for (i = 0; i < (ARRAY_SIZE(field) / 2); i++) {
 		ad9361_spi_write(phy->spi, REG_QUAD_CAL_NCO_FREQ_PHASE_OFFSET,
-			RX_NCO_FREQ(rxnco_word) | RX_NCO_PHASE_OFFSET(i));
+			RX_NCO_FREQ(rxnco_word) | RX_NCO_PHASE_OFFSET(phase));
+		ad9361_spi_write(phy->spi, REG_QUAD_CAL_CTRL,
+				SETTLE_MAIN_ENABLE | DC_OFFSET_ENABLE | QUAD_CAL_SOFT_RESET |
+				GAIN_ENABLE | PHASE_ENABLE | M_DECIM(decim));
+		ad9361_spi_write(phy->spi, REG_QUAD_CAL_CTRL,
+				SETTLE_MAIN_ENABLE | DC_OFFSET_ENABLE |
+				GAIN_ENABLE | PHASE_ENABLE | M_DECIM(decim));
 
 		ret =  ad9361_run_calibration(phy, TX_QUAD_CAL);
 		if (ret < 0)
 			return ret;
 
+		if (res)
+			*res = ad9361_spi_read(phy->spi, REG_QUAD_CAL_STATUS_TX1) &
+					(TX1_LO_CONV | TX1_SSB_CONV);
+
+		return 0;
+}
+
+static int ad9361_tx_quad_phase_search(struct ad9361_rf_phy *phy, u32 rxnco_word, u8 decim)
+{
+	int i, ret;
+	u8 field[64], val;
+	u32 start;
+
+	dev_dbg(&phy->spi->dev, "%s", __func__);
+
+	for (i = 0; i < (ARRAY_SIZE(field) / 2); i++) {
+		ret = __ad9361_tx_quad_calib(phy, i, rxnco_word, decim, &val);
+		if (ret < 0)
+			return ret;
+
 		/* Handle 360/0 wrap around */
-		val = ad9361_spi_read(phy->spi, REG_QUAD_CAL_STATUS_TX1);
 		field[i] = field[i + 32] = !((val & TX1_LO_CONV) && (val & TX1_SSB_CONV));
 	}
 
 	ret = ad9361_find_opt(field, ARRAY_SIZE(field), &start);
 
+	phy->last_tx_quad_cal_phase = (start + ret / 2) & 0x1F;
+
 #ifdef _DEBUG
 	for (i = 0; i < 64; i++) {
 		printk("%c", (field[i] ? '#' : 'o'));
 	}
-	printk(" RX_NCO_PHASE_OFFSET(%d) \n", (start + ret / 2) & 0x1F);
+	printk(" RX_NCO_PHASE_OFFSET(%d, 0x%X) \n", phy->last_tx_quad_cal_phase,
+	       phy->last_tx_quad_cal_phase);
 #endif
 
-	ad9361_spi_write(phy->spi, REG_QUAD_CAL_CTRL,
-			 SETTLE_MAIN_ENABLE | DC_OFFSET_ENABLE | QUAD_CAL_SOFT_RESET |
-			 GAIN_ENABLE | PHASE_ENABLE | M_DECIM(3));
-	ad9361_spi_write(phy->spi, REG_QUAD_CAL_CTRL,
-			 SETTLE_MAIN_ENABLE | DC_OFFSET_ENABLE |
-			 GAIN_ENABLE | PHASE_ENABLE | M_DECIM(3));
-
-	ad9361_spi_write(phy->spi, REG_QUAD_CAL_NCO_FREQ_PHASE_OFFSET,
-		RX_NCO_FREQ(rxnco_word) |
-		RX_NCO_PHASE_OFFSET((start + ret / 2) & 0x1F));
-
-	ret = ad9361_run_calibration(phy, TX_QUAD_CAL);
+	ret = __ad9361_tx_quad_calib(phy, phy->last_tx_quad_cal_phase, rxnco_word, decim, NULL);
 	if (ret < 0)
 		return ret;
 
@@ -2096,9 +2111,10 @@ static int ad9361_tx_quad_calib(struct ad9361_rf_phy *phy,
 	struct spi_device *spi = phy->spi;
 	unsigned long clktf, clkrf;
 	int txnco_word, rxnco_word, txnco_freq, ret;
-	u8 __rx_phase = 0, reg_inv_bits, val;
+	u8 __rx_phase = 0, reg_inv_bits, val, decim;
 	const u8 (*tab)[3];
 	u32 index_max, i , lpf_tia_mask;
+
 	/*
 	 * Find NCO frequency that matches this equation:
 	 * BW / 4 = Rx NCO freq = Tx NCO freq:
@@ -2118,6 +2134,11 @@ static int ad9361_tx_quad_calib(struct ad9361_rf_phy *phy,
 
  	dev_dbg(dev, "Tx NCO frequency: %lu (BW/4: %lu) txnco_word %d\n",
 		clktf * (txnco_word + 1) / 32, bw_tx / 4, txnco_word);
+
+	if (clktf <= 4000000UL)
+		decim = 2;
+	else
+		decim = 3;
 
 	if (clkrf == (2 * clktf)) {
 		__rx_phase = 0x0E;
@@ -2182,15 +2203,8 @@ static int ad9361_tx_quad_calib(struct ad9361_rf_phy *phy,
 					INVERT_RX2_RF_DC_CGOUT_WORD);
 	}
 
-	ad9361_spi_write(spi, REG_QUAD_CAL_NCO_FREQ_PHASE_OFFSET,
-			 RX_NCO_FREQ(rxnco_word) | RX_NCO_PHASE_OFFSET(__rx_phase));
+
 	ad9361_spi_writef(spi, REG_KEXP_2, TX_NCO_FREQ(~0), txnco_word);
-	ad9361_spi_write(spi, REG_QUAD_CAL_CTRL,
-			 SETTLE_MAIN_ENABLE | DC_OFFSET_ENABLE | QUAD_CAL_SOFT_RESET |
-			 GAIN_ENABLE | PHASE_ENABLE | M_DECIM(3));
-	ad9361_spi_write(spi, REG_QUAD_CAL_CTRL,
-			 SETTLE_MAIN_ENABLE | DC_OFFSET_ENABLE |
-			 GAIN_ENABLE | PHASE_ENABLE | M_DECIM(3));
 	ad9361_spi_write(spi, REG_QUAD_CAL_COUNT, 0xFF);
 	ad9361_spi_write(spi, REG_KEXP_1, KEXP_TX(1) | KEXP_TX_COMP(3) |
 			 KEXP_DC_I(3) | KEXP_DC_Q(3));
@@ -2219,16 +2233,23 @@ static int ad9361_tx_quad_calib(struct ad9361_rf_phy *phy,
 	ad9361_spi_write(spi, REG_QUAD_SETTLE_COUNT, 0xF0);
 	ad9361_spi_write(spi, REG_TX_QUAD_LPF_GAIN, 0x00);
 
-	ret = ad9361_run_calibration(phy, TX_QUAD_CAL);
+	ret = __ad9361_tx_quad_calib(phy, __rx_phase, rxnco_word, decim, &val);
 
-	val = ad9361_spi_readf(spi, REG_QUAD_CAL_STATUS_TX1,
-			       TX1_LO_CONV | TX1_SSB_CONV);
 	dev_dbg(dev, "LO leakage: %d Quadrature Calibration: %d : rx_phase %d\n",
 		!!(val & TX1_LO_CONV), !!(val & TX1_SSB_CONV), __rx_phase);
 
+	/* Calibration failed -> try last phase offset */
+	if (val != (TX1_LO_CONV | TX1_SSB_CONV)) {
+		if (phy->last_tx_quad_cal_phase < 31)
+			ret = __ad9361_tx_quad_calib(phy, phy->last_tx_quad_cal_phase,
+						     rxnco_word, decim, &val);
+	} else {
+		phy->last_tx_quad_cal_phase = __rx_phase;
+	}
+
 	/* Calibration failed -> loop through all 32 phase offsets */
 	if (val != (TX1_LO_CONV | TX1_SSB_CONV))
-		ret = ad9361_tx_quad_phase_search(phy, rxnco_word);
+		ret = ad9361_tx_quad_phase_search(phy, rxnco_word, decim);
 
 	if (phy->pdata->rx1rx2_phase_inversion_en ||
 		(phy->pdata->port_ctrl.pp_conf[1] & INVERT_RX2)) {
@@ -3338,7 +3359,7 @@ static int ad9361_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
 	unsigned long clktf, clkrf, adc_rate = 0, dac_rate = 0;
 	u64 bbpll_rate;
 	int i, index_rx = -1, index_tx = -1, tmp;
-	u32 div, tx_intdec, rx_intdec;
+	u32 div, tx_intdec, rx_intdec, recursion = 1;
 	const char clk_dividers[][4] = {
 		{12,3,2,2},
 		{8,2,2,2},
@@ -3349,7 +3370,6 @@ static int ad9361_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
 		{1,1,1,1},
 	};
 
-
 	if (phy->bypass_rx_fir)
 		rx_intdec = 1;
 	else
@@ -3359,6 +3379,11 @@ static int ad9361_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
 		tx_intdec = 1;
 	else
 		tx_intdec = phy->tx_fir_int;
+
+	if ((rate_gov == 1) && ((rx_intdec * tx_sample_rate * 8) < MIN_ADC_CLK)) {
+		recursion = 0;
+		rate_gov = 0;
+	}
 
 	dev_dbg(&phy->spi->dev, "%s: requested rate %lu TXFIR int %d RXFIR dec %d mode %s",
 		__func__, tx_sample_rate, tx_intdec, rx_intdec,
@@ -3402,7 +3427,7 @@ static int ad9361_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
 		}
 	}
 
-	if ((index_tx < 0 || index_tx > 6 || index_rx < 0 || index_rx > 6) && rate_gov < 7) {
+	if ((index_tx < 0 || index_tx > 6 || index_rx < 0 || index_rx > 6) && rate_gov < 7 && recursion) {
 		return ad9361_calculate_rf_clock_chain(phy, tx_sample_rate,
 			++rate_gov, rx_path_clks, tx_path_clks);
 	} else if ((index_tx < 0 || index_tx > 6 || index_rx < 0 || index_rx > 6)) {
@@ -3956,6 +3981,8 @@ static int ad9361_setup(struct ad9361_rf_phy *phy)
 		ad9361_trx_ext_lo_control(phy, false, pd->use_ext_rx_lo);
 
 
+	/* Skip quad cal here we do it later again */
+	phy->last_tx_quad_cal_freq = pd->tx_synth_freq;
 	ret = clk_set_rate(phy->clks[TX_RFPLL], ad9361_to_clk(pd->tx_synth_freq));
 	if (ret < 0) {
 		dev_err(dev, "Failed to set TX Synth rate (%d)\n",
@@ -4014,6 +4041,7 @@ static int ad9361_setup(struct ad9361_rf_phy *phy)
 	if (ret < 0)
 		return ret;
 
+	phy->last_tx_quad_cal_phase = ~0;
 	ret = ad9361_tx_quad_calib(phy, real_rx_bandwidth, real_tx_bandwidth, -1);
 	if (ret < 0)
 		return ret;
@@ -4438,12 +4466,10 @@ static int ad9361_validate_enable_fir(struct ad9361_rf_phy *phy)
 				clk_get_rate(phy->clks[TX_SAMPL_CLK]),
 				phy->rate_governor, rx, tx);
 		if (ret < 0) {
-			u32 min = DIV_ROUND_UP(MIN_ADC_CLK,
-					phy->rate_governor ? 8 : 12);
+			u32 min = phy->rate_governor ? 1500000U : 1000000U;
 			dev_err(dev,
 				"%s: Calculating filter rates failed %d "
 				"using min frequency",__func__, ret);
-			if (clk_get_rate(phy->clks[TX_SAMPL_CLK]) <= min)
 				ret = ad9361_calculate_rf_clock_chain(phy, min,
 					phy->rate_governor, rx, tx);
 			if (ret < 0) {
@@ -4525,7 +4551,7 @@ static void ad9361_work_func(struct work_struct *work)
 
 	dev_dbg(&phy->spi->dev, "%s:", __func__);
 
-	ret = ad9361_do_calib_run(phy, TX_QUAD_CAL, -1);
+	ret = ad9361_do_calib_run(phy, TX_QUAD_CAL, phy->last_tx_quad_cal_phase);
 	if (ret < 0)
 		dev_err(&phy->spi->dev,
 			"%s: TX QUAD cal failed", __func__);
@@ -5963,9 +5989,15 @@ static ssize_t ad9361_phy_show(struct device *dev,
 		ret = sprintf(buf, "%u\n", phy->current_tx_bw_Hz);
 		break;
 	case AD9361_ENSM_MODE:
-		ret = sprintf(buf, "%s\n",
-			      ad9361_ensm_states[ad9361_spi_readf
-			      (phy->spi, REG_STATE, ENSM_STATE(~0))]);
+		ret = ad9361_spi_readf(phy->spi, REG_STATE, ENSM_STATE(~0));
+		if (ret < 0)
+			break;
+		if (ret >= ARRAY_SIZE(ad9361_ensm_states) ||
+			ad9361_ensm_states[ret] == NULL) {
+			ret = -EIO;
+			break;
+		}
+		ret = sprintf(buf, "%s\n", ad9361_ensm_states[ret]);
 		break;
 	case AD9361_ENSM_MODE_AVAIL:
 		ret = sprintf(buf, "%s\n", phy->pdata->fdd ?
@@ -7652,7 +7684,7 @@ static int ad9361_probe(struct spi_device *spi)
 		dev_err(&spi->dev, "%s : Unsupported PRODUCT_ID 0x%X",
 			__func__, ret);
 		ret = -ENODEV;
-		goto out;
+		goto out_iio_device_free;
 	}
 
 	rev = ret & REV_MASK;
@@ -7665,16 +7697,18 @@ static int ad9361_probe(struct spi_device *spi)
 
 	ret = register_clocks(phy);
 	if (ret < 0)
-		goto out;
+		goto out_iio_device_free;
 
 	ad9361_init_gain_tables(phy);
 
 	ret = ad9361_setup(phy);
 	if (ret < 0)
-		goto out;
+		goto out_iio_device_free;
 
-	of_clk_add_provider(spi->dev.of_node,
+	ret = of_clk_add_provider(spi->dev.of_node,
 			    of_clk_src_onecell_get, &phy->clk_data);
+	if (ret)
+		goto out_disable_clocks;
 
 	sysfs_bin_attr_init(&phy->bin);
 	phy->bin.attr.name = "filter_fir_config";
@@ -7698,28 +7732,30 @@ static int ad9361_probe(struct spi_device *spi)
 
 	ret = iio_device_register(indio_dev);
 	if (ret < 0)
-		goto out_disable_clocks;
+		goto out_clk_del_provider;
 	ret = ad9361_register_axi_converter(phy);
 	if (ret < 0)
-		goto out1;
+		goto out_iio_device_unregister;
 	ret = sysfs_create_bin_file(&indio_dev->dev.kobj, &phy->bin);
 	if (ret < 0)
-		goto out1;
+		goto out_iio_device_unregister;
 
 	ret = ad9361_register_debugfs(indio_dev);
 	if (ret < 0)
-		goto out1;
+		goto out_iio_device_unregister;
 
 	dev_info(&spi->dev, "%s : AD9361 Rev %d successfully initialized",
 		 __func__, rev);
 
 	return 0;
 
-out1:
+out_iio_device_unregister:
 	iio_device_unregister(indio_dev);
+out_clk_del_provider:
+	of_clk_del_provider(spi->dev.of_node);
 out_disable_clocks:
 	ad9361_clks_disable(phy);
-out:
+out_iio_device_free:
 	iio_device_free(indio_dev);
 
 	return ret;
