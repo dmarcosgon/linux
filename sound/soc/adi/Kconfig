@@ -25,6 +25,15 @@ config SND_SOC_ADV7511_HDMI
 	depends on SND_SOC_ADI
 	select SND_SOC_ADI_AXI_SPDIF
 
+config SND_TE0720_SOC_PCM1754
+	tristate "SoC Audio support for PCM1754 on TE0720"
+	depends on SND_SOC_ADI
+	select SND_SOC_PCM1754
+	select SND_SOC_ADI_AXI_I2S
+	help
+	  Say Y or M if you want to add support for SoC audio on Zynq
+	  TE0720 board using AXI-I2S and PCM1754.
+
 config SND_ZYBO_SOC_PCM1794A
 	tristate "SoC Audio support for PCM1794A on ZYBO"
 	depends on SND_SOC_ADI
