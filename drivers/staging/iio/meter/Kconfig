@@ -60,4 +60,12 @@ config ADE7854_SPI
 	  To compile this driver as a module, choose M here: the
 	  module will be called ade7854-spi.
 
+config INA3221
+	tristate "TI INA3221 3-Channel Shunt and Bus Voltage Monitor"
+	depends on I2C
+	help
+	  TI INA3221 is Triple-Channel, High-Side Measurement, Shunt and Bus
+	  Voltage Monitor with I2C Interface
+	  Say Y here if you have INA3221 hooked to a I2C bus.
+
 endmenu
