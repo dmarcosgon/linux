@@ -1055,7 +1055,7 @@ static int ad9467_probe(struct spi_device *spi)
 		conv->adc_output_mode =
 		    AD9643_DEF_OUTPUT_MODE | OUTPUT_MODE_TWOS_COMPLEMENT;
 		ad9467_spi_write(spi, ADC_REG_OUTPUT_PHASE,
-				 OUTPUT_EVEN_ODD_MODE_EN);
+				 OUTPUT_EVEN_ODD_MODE_EN|INVERT_DCO_CLK	);
 		ret = ad9467_outputmode_set(spi, conv->adc_output_mode);
 		break;
 	case CHIPID_AD9250:
