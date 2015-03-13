@@ -30,11 +30,6 @@ struct masw_010350_state {
 	struct masw_010350_platform_data* pdata;
 	int gpio_states[3];
 	int selected;
-	/*
-	 * DMA (thus cache coherency maintenance) requires the
-	 * transfer buffers to live in their own cache lines.
-	 */
-	unsigned char		data ____cacheline_aligned;
 };
 
 	
@@ -173,30 +168,31 @@ static int masw_010350_probe(struct platform_device *pdev)
 	struct masw_010350_state *st;
 	int ret;
 	int i;
+	dev_err(&pdev->dev, "PROBING MASW...\n");
 	if (&pdev->dev.of_node) {
 		pdata = masw_010350_parse_dt(&pdev->dev);
 		if (pdata == NULL)
+			dev_err(&pdev->dev, "fail to get pdata\n");
 			return -EINVAL;
 	} else {
+			dev_err(&pdev->dev, "No OF node\n");
 			return -EINVAL;
-	}
-
-	if (!pdata) {
-		return -EINVAL;
 	}
 
 	if(pdata -> gpios[0] < 0 || pdata -> gpios[1] <0 || pdata -> gpios[2]<0){
+		dev_err(&pdev->dev, "Bad pdata gpios %d %d %d\n",pdata -> gpios[0],pdata -> gpios[1],pdata -> gpios[2]);
 		return -EINVAL;
 	}
 
 	indio_dev = devm_iio_device_alloc(&pdev->dev, sizeof(*st));
 	if (indio_dev == NULL) {
 		ret =  -ENOMEM;
+		dev_err(&pdev->dev, "fail to allocate indio_dev\n");
 		return ret;
 	}
 
 	st = iio_priv(indio_dev);
-	
+	platform_set_drvdata(pdev,indio_dev);
 	for(i=0;i<3;i++){
 		if (gpio_is_valid(pdata->gpios[i])) {
 		ret = devm_gpio_request(&pdev->dev, pdata->gpios[i],
