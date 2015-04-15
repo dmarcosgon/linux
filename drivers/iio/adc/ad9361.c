@@ -413,12 +413,17 @@ static int ad9361_reset(struct ad9361_rf_phy *phy)
 		mdelay(1);
 		dev_dbg(&phy->spi->dev, "%s: by GPIO", __func__);
 		return 0;
-	} else {
-		ad9361_spi_write(phy->spi, REG_SPI_CONF, SOFT_RESET | _SOFT_RESET); /* RESET */
-		ad9361_spi_write(phy->spi, REG_SPI_CONF, 0x0);
-		dev_dbg(&phy->spi->dev, "%s: by SPI", __func__);
-		return 0;
 	}
+
+	/* SPI Soft Reset was removed from the register map, since it doesn't
+	 * work reliably. Without a prober HW reset randomness may happen.
+	 * Please specify a RESET GPIO.
+	 */
+
+	ad9361_spi_write(phy->spi, REG_SPI_CONF, SOFT_RESET | _SOFT_RESET);
+	ad9361_spi_write(phy->spi, REG_SPI_CONF, 0x0);
+	dev_err(&phy->spi->dev,
+		 "%s: by SPI, this may cause unpredicted behavior!", __func__);
 
 	return -ENODEV;
 }
@@ -1430,7 +1435,7 @@ static int ad9361_gc_update(struct ad9361_rf_phy *phy)
 	 */
 
 	reg = DIV_ROUND_CLOSEST(phy->pdata->gain_ctrl.f_agc_state_wait_time_ns *
-				1000, clkrf / 1000UL);
+				(clkrf / 1000UL), 1000000UL);
 	reg = clamp_t(u32, reg, 0U, 31U);
 	ret |= ad9361_spi_writef(spi, REG_FAST_ENERGY_DETECT_COUNT,
 			  ENERGY_DETECT_COUNT(~0),  reg);
@@ -1923,8 +1928,10 @@ static int ad9361_txrx_synth_cp_calib(struct ad9361_rf_phy *phy,
 
 	/* Enable FDD mode during calibrations */
 
-	if (!phy->pdata->fdd)
-		ad9361_spi_write(phy->spi, REG_PARALLEL_PORT_CONF_3, LVDS_MODE);
+	if (!phy->pdata->fdd) {
+		ad9361_spi_writef(phy->spi, REG_PARALLEL_PORT_CONF_3,
+				  HALF_DUPLEX_MODE, 0);
+	}
 
 	ad9361_spi_write(phy->spi, REG_ENSM_CONFIG_2, DUAL_SYNTH_MODE);
 	ad9361_spi_write(phy->spi, REG_ENSM_CONFIG_1,
@@ -2507,6 +2514,14 @@ static int ad9361_pp_port_setup(struct ad9361_rf_phy *phy, bool restore_c3)
 		return ad9361_spi_write(spi, REG_PARALLEL_PORT_CONF_3,
 					pd->port_ctrl.pp_conf[2]);
 	}
+
+	/* Sanity check */
+	if (pd->port_ctrl.pp_conf[2] & LVDS_MODE)
+		pd->port_ctrl.pp_conf[2] &=
+		~(HALF_DUPLEX_MODE | SINGLE_DATA_RATE | SINGLE_PORT_MODE);
+
+	if (pd->port_ctrl.pp_conf[2] & FULL_PORT)
+		pd->port_ctrl.pp_conf[2] &= ~(HALF_DUPLEX_MODE | SINGLE_PORT_MODE);
 
 	ad9361_spi_write(spi, REG_PARALLEL_PORT_CONF_1, pd->port_ctrl.pp_conf[0]);
 	ad9361_spi_write(spi, REG_PARALLEL_PORT_CONF_2, pd->port_ctrl.pp_conf[1]);
