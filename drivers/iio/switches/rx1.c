@@ -181,27 +181,27 @@ static ssize_t rx1_rfio_read(struct iio_dev *indio_dev,
         case 0:
             switch (st->selected) {
                 case 0:
-                    ret = sprintf(buf, "%s", "Disconnected");
+                    ret = sprintf(buf, "%s\n", "Disconnected");
                     break;
                 case 1:
-                    ret = sprintf(buf, "%s", "Test");
+                    ret = sprintf(buf, "%s\n", "Test");
                     break;
                 case 2:
-                    ret = sprintf(buf, "%s", "1.2GHz-3GHz");
+                    ret = sprintf(buf, "%s\n", "1.2GHz-3GHz");
                     break;
                 case 3:
-                    ret = sprintf(buf, "%s", "50ohm load");
+                    ret = sprintf(buf, "%s\n", "50ohm load");
                     break;
                 case 4:
-                    ret = sprintf(buf, "%s", "20MHz-1.2GHz");
+                    ret = sprintf(buf, "%s\n", "20MHz-1.2GHz");
                     break;
             }
             break;
         case 1:
-            ret = sprintf(buf, "%s", st->rfen ? "RF disabled" : "RF enabled");
+            ret = sprintf(buf, "%s\n", st->rfen ? "RF disabled" : "RF enabled");
             break;
         case 2:
-            ret = sprintf(buf, "%s", st->picrst ? "PIC held in reset" : "PIC running");
+            ret = sprintf(buf, "%s\n", st->picrst ? "PIC held in reset" : "PIC running");
             break;
         default:
             ret = -EINVAL;
@@ -221,19 +221,19 @@ static ssize_t rx1_ddc_read(struct iio_dev *indio_dev,
         case 0:
             switch (st->stage2mode) {
                 case 0:
-                    ret = sprintf(buf, "%s", "Bypass");
+                    ret = sprintf(buf, "%s\n", "Bypass");
                     break;
                 case 1:
-                    ret = sprintf(buf, "%s", "340kHz");
+                    ret = sprintf(buf, "%s\n", "340kHz");
                     break;
                 case 2:
-                    ret = sprintf(buf, "%s", "240kHz");
+                    ret = sprintf(buf, "%s\n", "240kHz");
                     break;
                 case 3:
-                    ret = sprintf(buf, "%s", "100kHz");
+                    ret = sprintf(buf, "%s\n", "100kHz");
                     break;
                 case 4:
-                    ret = sprintf(buf, "%s", "30kHz");
+                    ret = sprintf(buf, "%s\n", "30kHz");
                     break;
             }
             break;
@@ -242,10 +242,10 @@ static ssize_t rx1_ddc_read(struct iio_dev *indio_dev,
                     st->stage1mode & 0x02 ? "12dB" : "0dB");
             break;
         case 2:
-            ret = sprintf(buf, "%s", st->mixerpol ? "Positive" : "Negative");
+            ret = sprintf(buf, "%s\n", st->mixerpol ? "Positive" : "Negative");
             break;
         case 3:
-            ret = sprintf(buf, "%s", st->mixerbyp ? "Bypass" : "Normal");
+            ret = sprintf(buf, "%s\n", st->mixerbyp ? "Bypass" : "Normal");
             break;
         default:
             ret = -EINVAL;
@@ -261,7 +261,7 @@ static ssize_t rx1_ddcfreq_read(struct iio_dev *indio_dev,
     struct rx1_state *st = iio_priv(indio_dev);
     int ret = 0;
     mutex_lock(&indio_dev->mlock);
-    ret = sprintf(buf, "%d", st->ddcfrequency);
+    ret = sprintf(buf, "%d\n", st->ddcfrequency);
     mutex_unlock(&indio_dev->mlock);
     return ret;
 }
