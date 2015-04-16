@@ -106,10 +106,13 @@ static ssize_t rx1_ddc_write(struct iio_dev *indio_dev,
     switch ((u32) private) {
         case 0:
             if (readin < 0 || readin > 4) ret = -EINVAL;
-            else if (!st->stage1mode & 0x01) { //Bypass enabled
-                st->stage2mode = readin;
-            } else
-                st->stage2mode = 0;
+            else {
+                if (st->stage1mode & 0x01) { //Bypass enabled
+                    st->stage2mode = 0;
+                } else {
+                    st->stage2mode = readin;
+                }
+            }
             break;
         case 1:
             if (readin < 0 || readin > 3)ret = -EINVAL;
@@ -127,10 +130,12 @@ static ssize_t rx1_ddc_write(struct iio_dev *indio_dev,
             break;
         case 3:
             if (readin < 0 || readin > 1)ret = -EINVAL;
-            else if (!st->stage1mode & 0x01) { //Bypass enabled
-                st->mixerbyp = readin;
-            } else {
-                st->mixerbyp = 1;
+            else {
+                if (st->stage1mode & 0x01) { //Bypass enabled
+                    st->mixerbyp = 1;
+                } else {
+                    st->mixerbyp = readin;
+                }
             }
             break;
         default:
@@ -238,7 +243,7 @@ static ssize_t rx1_ddc_read(struct iio_dev *indio_dev,
             }
             break;
         case 1:
-            ret = sprintf(buf, "%s %s", st->stage1mode & 0x01 ? "Bypass" : "",
+            ret = sprintf(buf, "%s %s\n", st->stage1mode & 0x01 ? "Bypass" : "",
                     st->stage1mode & 0x02 ? "12dB" : "0dB");
             break;
         case 2:
@@ -431,7 +436,7 @@ static int rx1_remove(struct platform_device *pdev) {
 
 #ifdef CONFIG_OF
 static const struct of_device_id rx1_dt_match[] = {
-    { .compatible = "gr,rx1_rfio"},
+    { .compatible = "gr,rx1_config"},
     {},
 };
 MODULE_DEVICE_TABLE(of, rx1_dt_match);
@@ -440,7 +445,7 @@ MODULE_DEVICE_TABLE(of, rx1_dt_match);
 static struct platform_driver rx1_driver = {
     .driver =
     {
-        .name = "rx1_rfio",
+        .name = "rx1_config",
         .owner = THIS_MODULE,
         .of_match_table = of_match_ptr(rx1_dt_match),
     },
