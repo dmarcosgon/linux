@@ -21,7 +21,7 @@
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
 #include <asm/io.h>
-#define NUM_CHANNELS 4
+#define NUM_CHANNELS 5
 #define GAIN_STEPS 37
 const unsigned int gaincodes[37] = {
     1024, 1149, 1289, 1446, 1623, 1821,
@@ -32,6 +32,7 @@ const unsigned int gaincodes[37] = {
     32382, 36333, 40766, 45740, 51322, 57584,
     64610
 };
+char *colors[8] = {"off", "green", "red", "yellow", "blue", "cyan", "purple", "white"};
 
 struct rx1_platform_data {
     unsigned long *base_addr;
@@ -52,6 +53,7 @@ struct rx1_state {
     unsigned int ddcfrequency;
     unsigned int ifgain;
     unsigned int ifgaindb;
+    unsigned int ledcolor;
     struct rx1_platform_data* pdata;
 };
 
@@ -175,6 +177,27 @@ static ssize_t rx1_ddcfreq_write(struct iio_dev *indio_dev,
     return ret ? ret : len;
 }
 
+static ssize_t rx1_led_write(struct iio_dev *indio_dev,
+        uintptr_t private,
+        const struct iio_chan_spec *chan,
+        const char *buf, size_t len) {
+    unsigned long long readin;
+    struct rx1_state *st = iio_priv(indio_dev);
+    int ret = 0;
+    ret = kstrtoull(buf, 10, &readin);
+    if (ret)
+        return ret;
+    mutex_lock(&indio_dev->mlock);
+    if (readin < 0 || readin > 7)
+        ret = -EINVAL;
+    else {
+        st->ledcolor = readin;
+        iowrite32(readin, (st->pdata->base_addr) + chan->channel);
+    }
+    mutex_unlock(&indio_dev->mlock);
+    return ret ? ret : len;
+}
+
 static ssize_t rx1_rfio_read(struct iio_dev *indio_dev,
         uintptr_t private,
         const struct iio_chan_spec *chan,
@@ -271,6 +294,22 @@ static ssize_t rx1_ddcfreq_read(struct iio_dev *indio_dev,
     return ret;
 }
 
+static ssize_t rx1_led_read(struct iio_dev *indio_dev,
+        uintptr_t private,
+        const struct iio_chan_spec *chan,
+        char *buf) {
+    struct rx1_state *st = iio_priv(indio_dev);
+    int ret = 0;
+    mutex_lock(&indio_dev->mlock);
+    if (st->ledcolor < 0 || st->ledcolor > 7) {
+        ret = sprintf(buf, "error\n");
+    } else {
+        ret = sprintf(buf, "%s\n", colors[st->ledcolor]);
+    }
+    mutex_unlock(&indio_dev->mlock);
+    return ret;
+}
+
 static int rx1_ifgain_write_raw(struct iio_dev *indio_dev,
         struct iio_chan_spec const *chan,
         int val,
@@ -345,6 +384,9 @@ static const struct iio_chan_spec_ext_info rx1_ddcfreq_ext_info[] = {
     _RX1_EXT_INFO("ddcfrequency", 0, rx1_ddcfreq_write, rx1_ddcfreq_read), {}, //24
 };
 
+static const struct iio_chan_spec_ext_info rx1_led_ext_info[] = {
+    _RX1_EXT_INFO("ledcolor", 0, rx1_led_write, rx1_led_read), //0-3
+};
 static const struct iio_chan_spec rx1_chan[NUM_CHANNELS] = {
     {.type = IIO_ALTVOLTAGE,
         .channel = 0,
@@ -366,6 +408,11 @@ static const struct iio_chan_spec rx1_chan[NUM_CHANNELS] = {
         .indexed = 1,
         .output = 1,
         .info_mask_separate = BIT(IIO_CHAN_INFO_HARDWAREGAIN),},
+    {.type = IIO_ALTVOLTAGE,
+        .channel = 4,
+        .indexed = 1,
+        .output = 1,
+        .ext_info = rx1_led_ext_info,},
 };
 
 static const struct iio_info rx1_info = {
@@ -418,6 +465,8 @@ static int rx1_probe(struct platform_device *pdev) {
     iowrite32(0x8F, pdata.base_addr);
     udelay(1000);
     iowrite32(0x0F, pdata.base_addr);
+    st->ledcolor = 2;
+    iowrite32(2, (pdata.base_addr) + 4); //LED starts RED
     return 0;
 err_alloc_indio:
     iounmap(pdata.base_addr);

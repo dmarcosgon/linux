@@ -28,12 +28,12 @@ static const struct snd_soc_dapm_widget te0720_pcm1754_widgets[] = {
 };
 
 static const struct snd_soc_dapm_route te0720_pcm1754_routes[] = {
-	{ "OUT+", NULL, "Playback" },
+	{ "OUTL", NULL, "Playback" },
 	{ "OUTR", NULL, "Playback" },
 };
 
 
-static struct snd_soc_dai_link zybo_dai_pcm1754 = {
+static struct snd_soc_dai_link te0720_dai_pcm1754 = {
 	.name		= "PCM1754", 
 	.stream_name	= "Playback",
 	.codec_dai_name	= "pcm1754-hifi", 
@@ -45,7 +45,7 @@ static struct snd_soc_dai_link zybo_dai_pcm1754 = {
 static struct snd_soc_card te0720_pcm1754_card = {
 	.name = "TE0720 PCM1754",
 	.owner = THIS_MODULE,
-	.dai_link = &zybo_dai_pcm1754,
+	.dai_link = &te0720_dai_pcm1754,
 	.num_links = 1,
 	.dapm_widgets = te0720_pcm1754_widgets,
 	.num_dapm_widgets = ARRAY_SIZE(te0720_pcm1754_widgets),
@@ -64,12 +64,12 @@ static int te0720_pcm1754_probe(struct platform_device *pdev)
 
 	card->dev = &pdev->dev;
 
-	zybo_dai_pcm1754.codec_of_node = of_parse_phandle(of_node, "audio-codec", 0);
-	zybo_dai_pcm1754.cpu_of_node = of_parse_phandle(of_node, "cpu-dai", 0);
-	zybo_dai_pcm1754.platform_of_node = zybo_dai_pcm1754.cpu_of_node;
+	te0720_dai_pcm1754.codec_of_node = of_parse_phandle(of_node, "audio-codec", 0);
+	te0720_dai_pcm1754.cpu_of_node = of_parse_phandle(of_node, "cpu-dai", 0);
+	te0720_dai_pcm1754.platform_of_node = te0720_dai_pcm1754.cpu_of_node;
 
-	if (!zybo_dai_pcm1754.codec_of_node ||
-		!zybo_dai_pcm1754.cpu_of_node)
+	if (!te0720_dai_pcm1754.codec_of_node ||
+		!te0720_dai_pcm1754.cpu_of_node)
 		return -ENXIO;
 
 	return snd_soc_register_card(card);
@@ -100,7 +100,7 @@ static struct platform_driver te0720_pcm1754_card_driver = {
 };
 module_platform_driver(te0720_pcm1754_card_driver);
 
-MODULE_DESCRIPTION("ASoC ZYBO PCM1754 driver");
+MODULE_DESCRIPTION("ASoC TE0720 PCM1754 driver");
 MODULE_AUTHOR("David Marcos <dmarcosgon@gr.ssr.upm.es>");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("platform:zybo-pcm1754-snd");
+MODULE_ALIAS("platform:te0720-pcm1754-snd");
