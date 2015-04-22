@@ -538,7 +538,7 @@
 				};
 			};
 
-			ina3221x@40 {
+			ina3221_adc_ol@40 {
 				compatible = "ti,ina3221x";
 				reg = <0x40>;
 				ti,trigger-config = <0x7003>;
@@ -566,7 +566,7 @@
 				};
 			};
 
-			ina3221x@43 {
+			ina3221x_rf_clk@43 {
 				compatible = "ti,ina3221x";
 				reg = <0x43>;
 				ti,trigger-config = <0x7003>;

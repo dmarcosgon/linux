@@ -96,6 +96,7 @@ struct ina3221_chan_pdata {
 struct ina3221_platform_data {
 	u16 cont_conf_data;
 	u16 trig_conf_data;
+        char name[I2C_NAME_SIZE];
 	struct ina3221_chan_pdata cpdata[INA3221_NUMBER_OF_RAILS];
 };
 struct ina3221_chip {
@@ -710,6 +711,7 @@ static struct ina3221_platform_data *ina3221_get_platform_data_dt(
 		dev_err(&client->dev, "pdata allocation failed\n");
 		return ERR_PTR(-ENOMEM);
 	}
+        strncpy(&pdata->name[0], np->name, I2C_NAME_SIZE - 1);
 	ret = of_property_read_u32(np, "ti,continuous-config", &pval);
 	if (!ret)
 		pdata->cont_conf_data = (u16)pval;
@@ -783,7 +785,8 @@ static int ina3221_probe(struct i2c_client *client,
 	indio_dev->info = &ina3221_info;
 	indio_dev->channels = ina3221_channels_spec;
 	indio_dev->num_channels = ARRAY_SIZE(ina3221_channels_spec);
-	indio_dev->name = id->name;
+	indio_dev->name = (pdata->name[0] != 0) ? pdata->name :
+		"ina3221x";
 	indio_dev->dev.parent = &client->dev;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	ret = devm_iio_device_register(chip->dev, indio_dev);
