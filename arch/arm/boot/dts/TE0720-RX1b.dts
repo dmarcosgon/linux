@@ -657,6 +657,11 @@
 		reg = <0x41210000 0x10000>;
 	};
 
+	demod@41200000 {
+		compatible = "gr,rx1_demod_config";
+		reg = <0x41200000 0x10000>;
+	};
+
 	clocks {
 
 		clock@0 {

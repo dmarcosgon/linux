@@ -14,9 +14,15 @@ config MASW010350
 	  SP4T switch
 
 config RX1
-	tristate "RX1 RF_related switches"
+	tristate "RX1 config"
 	help
-	  Say yes here to build support for RX1 RF related switches
+	  Say yes here to build support for RX1 rf configuration
+
+config RX1_DEMOD
+	tristate "RX1 demodulator control"
+	help
+	  Say yes here to build support for RX1 demodulator config
+
 
 endmenu
 

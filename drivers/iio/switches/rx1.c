@@ -40,8 +40,6 @@ struct rx1_platform_data {
     unsigned long remap_size;
 };
 
-struct rx1_platform_data pdata;
-
 struct rx1_state {
     unsigned int selected;
     unsigned int rfen;
@@ -317,7 +315,7 @@ static int rx1_ifgain_write_raw(struct iio_dev *indio_dev,
         long mask) {
     struct rx1_state *st = iio_priv(indio_dev);
     unsigned int code;
-    int ret;
+    int ret=0;
     if (val < 0 || val > 36 || val2 < 0)
         return -EINVAL;
     code = gaincodes[(u8) val]; //integer part of gain
@@ -330,6 +328,7 @@ static int rx1_ifgain_write_raw(struct iio_dev *indio_dev,
             break;
         default:
             ret = -EINVAL;
+	    break;
     }
     mutex_unlock(&indio_dev->mlock);
     return ret;
@@ -422,26 +421,32 @@ static const struct iio_info rx1_info = {
 };
 
 static int rx1_probe(struct platform_device *pdev) {
+    struct rx1_platform_data *pdata;
     struct iio_dev *indio_dev;
     struct rx1_state *st;
     int ret = 0;
 
-    pdata.res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-    if (!pdata.res) {
+    pdata = devm_kzalloc(&pdev->dev, sizeof (*pdata), GFP_KERNEL);
+    if (!pdata) {
+        dev_err(&pdev->dev, "could not allocate memory for platform data\n");
+        return -EINVAL;
+    }
+    pdata->res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+    if (!pdata->res) {
         dev_err(&pdev->dev, "No memory resource\n");
         return -ENODEV;
     }
 
-    pdata.remap_size = pdata.res->end - pdata.res->start + 1;
-    if (!request_mem_region(pdata.res->start, pdata.remap_size, pdev->name)) {
+    pdata->remap_size = pdata->res->end - pdata->res->start + 1;
+    if (!request_mem_region(pdata->res->start, pdata->remap_size, pdev->name)) {
         dev_err(&pdev->dev, "Cannot request IO\n");
         return -ENXIO;
     }
 
-    pdata.base_addr = ioremap(pdata.res->start, pdata.remap_size);
-    if (pdata.base_addr == NULL) {
+    pdata->base_addr = ioremap(pdata->res->start, pdata->remap_size);
+    if (pdata->base_addr == NULL) {
         dev_err(&pdev->dev, "Couldn't ioremap memory at 0x%08lx\n",
-                (unsigned long) pdata.res->start);
+                (unsigned long) pdata->res->start);
         ret = -ENOMEM;
         goto err_release_region;
     }
@@ -454,7 +459,7 @@ static int rx1_probe(struct platform_device *pdev) {
     }
     st = iio_priv(indio_dev);
     platform_set_drvdata(pdev, indio_dev);
-    st->pdata = &pdata;
+    st->pdata = pdata;
     indio_dev->dev.parent = NULL;
     indio_dev->name = "RX1_CONFIG";
     indio_dev->info = &rx1_info;
@@ -462,24 +467,25 @@ static int rx1_probe(struct platform_device *pdev) {
     indio_dev->channels = rx1_chan;
     indio_dev->num_channels = NUM_CHANNELS;
     ret = iio_device_register(indio_dev);
-    iowrite32(0x8F, pdata.base_addr);
+    iowrite32(0x8F, pdata->base_addr);
     udelay(1000);
-    iowrite32(0x0F, pdata.base_addr);
+    iowrite32(0x0F, pdata->base_addr);
     st->ledcolor = 2;
-    iowrite32(2, (pdata.base_addr) + 4); //LED starts RED
+    iowrite32(2, (pdata->base_addr) + 4); //LED starts RED
     return 0;
 err_alloc_indio:
-    iounmap(pdata.base_addr);
+    iounmap(pdata->base_addr);
 err_release_region:
-    release_mem_region(pdata.res->start, pdata.remap_size);
+    release_mem_region(pdata->res->start, pdata->remap_size);
     return ret;
 }
 
 static int rx1_remove(struct platform_device *pdev) {
     struct iio_dev *indio_dev = platform_get_drvdata(pdev);
+    struct rx1_state *st = iio_priv(indio_dev);
+    iounmap(st->pdata->base_addr);
+    release_mem_region(st->pdata->res->start, st->pdata->remap_size);
     iio_device_unregister(indio_dev);
-    iounmap(pdata.base_addr);
-    release_mem_region(pdata.res->start, pdata.remap_size);
     return 0;
 }
 
