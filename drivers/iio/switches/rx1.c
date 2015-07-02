@@ -52,6 +52,8 @@ struct rx1_state {
     unsigned int selected;
     unsigned int rfen;
     unsigned int picrst;
+    unsigned int rfshutdown;
+    unsigned int pllfunction;
     unsigned int stage2mode;
     unsigned int stage1mode;
     unsigned int mixerpol;
@@ -98,12 +100,20 @@ static ssize_t rx1_rfio_write(struct iio_dev *indio_dev,
         case 2:
             st->picrst = readin ? 1 : 0;
             break;
+        case 3:
+            st->rfshutdown = readin ? 1 : 0;
+            break;
+        case 4:
+            st->pllfunction = readin ? 1 : 0;
+            break;
         default:
             ret = -EINVAL;
     }
     if (!ret) {
         regval |= st->rfen;
         regval |= st->selected ? (st->selected) << 1 : 0xE;
+        regval |= st->rfshutdown << 4;
+        regval |= st->pllfunction << 5;
         regval |= st->picrst << 7;
         iowrite32(regval, (st->pdata->base_addr) + chan->channel);
     }
@@ -112,9 +122,9 @@ static ssize_t rx1_rfio_write(struct iio_dev *indio_dev,
 }
 
 static ssize_t rx1_ddc_write(struct iio_dev *indio_dev,
-    uintptr_t private,
-    const struct iio_chan_spec *chan,
-    const char *buf, size_t len) {
+        uintptr_t private,
+        const struct iio_chan_spec *chan,
+        const char *buf, size_t len) {
     unsigned long long readin;
     struct rx1_state *st = iio_priv(indio_dev);
     int ret = 0;
@@ -125,7 +135,7 @@ static ssize_t rx1_ddc_write(struct iio_dev *indio_dev,
     mutex_lock(&indio_dev->mlock);
     switch ((u32) private) {
         case 0:
-            if (readin < 0 || readin > 4) ret = -EINVAL;
+            if (readin < 0 || readin > 5) ret = -EINVAL;
             else {
                 if (st->stage1mode & 0x01) { //Bypass enabled
                     st->stage2mode = 0;
@@ -162,7 +172,7 @@ static ssize_t rx1_ddc_write(struct iio_dev *indio_dev,
             ret = -EINVAL;
     }
     if (!ret) {
-        regval |= st->stage2mode;
+        regval |= st->stage2mode < 5 ? st->stage2mode : 4;
         regval |= st->stage1mode << 4;
         regval |= st->mixerpol << 6;
         regval |= st->mixerbyp << 7;
@@ -188,7 +198,7 @@ static ssize_t rx1_ddcfreq_write(struct iio_dev *indio_dev,
         ret = -EINVAL;
     else {
         regval = ((u32) readin * 4096) / 1875;
-        st->ddcfrequency =(regval * 1875) / 4096;
+        st->ddcfrequency = (regval * 1875) / 4096;
         iowrite32(regval, (st->pdata->base_addr) + chan->channel);
     }
     mutex_unlock(&indio_dev->mlock);
@@ -249,6 +259,12 @@ static ssize_t rx1_rfio_read(struct iio_dev *indio_dev,
         case 2:
             ret = sprintf(buf, "%s\n", st->picrst ? "PIC held in reset" : "PIC running");
             break;
+        case 3:
+            ret = sprintf(buf, "%s\n", st->rfshutdown ? "FMC power off" : "FMC power on");
+            break;
+        case 4:
+            ret = sprintf(buf, "%s\n", st->pllfunction ? "1" : "0");
+            break;
         default:
             ret = -EINVAL;
     }
@@ -280,6 +296,9 @@ static ssize_t rx1_ddc_read(struct iio_dev *indio_dev,
                     break;
                 case 4:
                     ret = sprintf(buf, "%s\n", "30kHz");
+                    break;
+      		case 5:
+                    ret = sprintf(buf, "%s\n", "15kHz");
                     break;
             }
             break;
@@ -324,7 +343,6 @@ static ssize_t rx1_if_out_freq_read(struct iio_dev *indio_dev,
     return ret;
 }
 
-
 static ssize_t rx1_led_read(struct iio_dev *indio_dev,
         uintptr_t private,
         const struct iio_chan_spec *chan,
@@ -341,7 +359,6 @@ static ssize_t rx1_led_read(struct iio_dev *indio_dev,
     return ret;
 }
 
-
 static ssize_t rx1_fmc_status_read(struct iio_dev *indio_dev,
         uintptr_t private,
         const struct iio_chan_spec *chan,
@@ -349,42 +366,42 @@ static ssize_t rx1_fmc_status_read(struct iio_dev *indio_dev,
     struct rx1_state *st = iio_priv(indio_dev);
     unsigned int regval = 0;
     int ret = 0;
-    
+
     mutex_lock(&indio_dev->mlock);
-    regval= (u32)ioread32((st->pdata->base_addr) + chan->channel);
-    
+    regval = (u32) ioread32((st->pdata->base_addr) + chan->channel);
+
     switch ((u32) private) {
-        case 0:       
-            st->PLLstatus = ((regval & FMC_PLL_STATUS) == FMC_PLL_STATUS) ? 1 : 0; 
-            ret = sprintf(buf, "%d\n", st->PLLstatus );
+        case 0:
+            st->PLLstatus = ((regval & FMC_PLL_STATUS) == FMC_PLL_STATUS) ? 1 : 0;
+            ret = sprintf(buf, "%d\n", st->PLLstatus);
             break;
         case 1:
             st->OLlockDetect = ((regval & FMC_OL_LD) == FMC_OL_LD) ? 1 : 0;
-            ret = sprintf(buf, "%d\n", st->OLlockDetect );
+            ret = sprintf(buf, "%d\n", st->OLlockDetect);
             break;
         case 2:
-            st->RFalert = ((regval & FMC_RF_ALERT)== FMC_RF_ALERT)  ? 1 : 0;
-            ret = sprintf(buf, "%d\n", st->RFalert );
+            st->RFalert = ((regval & FMC_RF_ALERT) == FMC_RF_ALERT) ? 1 : 0;
+            ret = sprintf(buf, "%d\n", st->RFalert);
             break;
         case 3:
-            st->TempAlert = ((regval & FMC_TEMP_ALERT)== FMC_TEMP_ALERT)  ? 1 : 0;
-            ret = sprintf(buf, "%d\n", st->TempAlert );
+            st->TempAlert = ((regval & FMC_TEMP_ALERT) == FMC_TEMP_ALERT) ? 1 : 0;
+            ret = sprintf(buf, "%d\n", st->TempAlert);
             break;
         case 4:
-            st->PWRvalid = ((regval & FMC_PWR_VALID)== FMC_PWR_VALID)  ? 1 : 0;
-            ret = sprintf(buf, "%d\n", st->PWRvalid );
+            st->PWRvalid = ((regval & FMC_PWR_VALID) == FMC_PWR_VALID) ? 1 : 0;
+            ret = sprintf(buf, "%d\n", st->PWRvalid);
             break;
         case 5:
-            st->PWRalert = ((regval & FMC_PWR_ALERT)== FMC_PWR_ALERT)  ? 1 : 0;
-            ret = sprintf(buf, "%d\n", st->PWRalert );
+            st->PWRalert = ((regval & FMC_PWR_ALERT) == FMC_PWR_ALERT) ? 1 : 0;
+            ret = sprintf(buf, "%d\n", st->PWRalert);
             break;
         case 6:
-            ret = sprintf(buf, "%d\n", regval );
+            ret = sprintf(buf, "%d\n", regval);
             break;
         default:
             ret = -EINVAL;
     }
-    
+
     mutex_unlock(&indio_dev->mlock);
     return ret;
 }
@@ -397,47 +414,47 @@ static ssize_t rx1_pwr_measure_read(struct iio_dev *indio_dev,
     unsigned int regval = 0;
     int ret = 0;
     mutex_lock(&indio_dev->mlock);
-    regval= (u32)ioread32((st->pdata->base_addr) + chan->channel);
-    st->pwrMeanCh0 = (regval&0x000000FF);
-    regval>>=8;
-    st->pwrMeanCh1 = (regval&0x000000FF);
-    regval>>=8;
-    st->pwrPeakCh0 = (regval&0x000000FF);
-    regval>>=8;
-    st->pwrPeakCh1 = (regval&0x000000FF);
+    regval = (u32) ioread32((st->pdata->base_addr) + chan->channel);
+    st->pwrMeanCh0 = (regval & 0x000000FF);
+    regval >>= 8;
+    st->pwrMeanCh1 = (regval & 0x000000FF);
+    regval >>= 8;
+    st->pwrPeakCh0 = (regval & 0x000000FF);
+    regval >>= 8;
+    st->pwrPeakCh1 = (regval & 0x000000FF);
     switch ((u32) private) {
         case 0:
-            ret = sprintf(buf, "%d\n", st->pwrMeanCh0 );
+            ret = sprintf(buf, "%d\n", st->pwrMeanCh0);
             break;
         case 1:
-            ret = sprintf(buf, "%d\n", st->pwrMeanCh1 );
+            ret = sprintf(buf, "%d\n", st->pwrMeanCh1);
             break;
         case 2:
-            ret = sprintf(buf, "%d\n", st->pwrPeakCh0 );
+            ret = sprintf(buf, "%d\n", st->pwrPeakCh0);
             break;
         case 3:
-            ret = sprintf(buf, "%d\n", st->pwrPeakCh1 );
+            ret = sprintf(buf, "%d\n", st->pwrPeakCh1);
             break;
         default:
             ret = -EINVAL;
     }
-    
+
     mutex_unlock(&indio_dev->mlock);
     return ret;
 }
 
 static ssize_t rx1_ifamp_measure_read(struct iio_dev *indio_dev,
-    uintptr_t private,
-    const struct iio_chan_spec *chan,
-    char *buf) {
+        uintptr_t private,
+        const struct iio_chan_spec *chan,
+        char *buf) {
     struct rx1_state *st = iio_priv(indio_dev);
     unsigned int regval = 0;
     int ret = 0;
-    
+
     mutex_lock(&indio_dev->mlock);
-    regval= (u32)ioread32((st->pdata->base_addr) + chan->channel);
-    st->ifPeakAmplitude = regval&0x00FFFFFF;
-    ret = sprintf(buf, "%d\n", st->ifPeakAmplitude );  
+    regval = (u32) ioread32((st->pdata->base_addr) + chan->channel);
+    st->ifPeakAmplitude = regval & 0x00FFFFFF;
+    ret = sprintf(buf, "%d\n", st->ifPeakAmplitude);
     mutex_unlock(&indio_dev->mlock);
     return ret;
 }
@@ -449,7 +466,7 @@ static int rx1_ifgain_write_raw(struct iio_dev *indio_dev,
         long mask) {
     struct rx1_state *st = iio_priv(indio_dev);
     unsigned int code;
-    int ret=0;
+    int ret = 0;
     if (val < 0 || val > 36 || val2 < 0)
         return -EINVAL;
     code = gaincodes[(u8) val]; //integer part of gain
@@ -462,7 +479,7 @@ static int rx1_ifgain_write_raw(struct iio_dev *indio_dev,
             break;
         default:
             ret = -EINVAL;
-	    break;
+            break;
     }
     mutex_unlock(&indio_dev->mlock);
     return ret;
@@ -483,7 +500,7 @@ static ssize_t rx1_if_out_freq_write(struct iio_dev *indio_dev,
     if (readin < 0 || readin > 60000000)
         ret = -EINVAL;
     else {
-        regval = ((u32) readin /1875);
+        regval = ((u32) readin / 1875);
         regval *= 2048;
         iowrite32(regval, (st->pdata->base_addr) + chan->channel);
         regval /= 2048;
@@ -527,7 +544,9 @@ static int rx1_ifgain_read_raw(struct iio_dev *indio_dev,
 static const struct iio_chan_spec_ext_info rx1_rfio_ext_info[] = {
     _RX1_EXT_INFO("branch", 0, rx1_rfio_write, rx1_rfio_read),
     _RX1_EXT_INFO("rfen", 1, rx1_rfio_write, rx1_rfio_read),
-    _RX1_EXT_INFO("picrst", 2, rx1_rfio_write, rx1_rfio_read), {},
+    _RX1_EXT_INFO("picrst", 2, rx1_rfio_write, rx1_rfio_read),
+    _RX1_EXT_INFO("rfshutdown", 3, rx1_rfio_write, rx1_rfio_read),
+    _RX1_EXT_INFO("pllfunction", 4, rx1_rfio_write, rx1_rfio_read), {},
 };
 
 static const struct iio_chan_spec_ext_info rx1_ddc_ext_info[] = {
@@ -543,7 +562,7 @@ static const struct iio_chan_spec_ext_info rx1_ddcfreq_ext_info[] = {
 };
 
 static const struct iio_chan_spec_ext_info rx1_led_ext_info[] = {
-    _RX1_EXT_INFO("ledcolor", 0, rx1_led_write, rx1_led_read), //0-3
+    _RX1_EXT_INFO("ledcolor", 0, rx1_led_write, rx1_led_read), {}, //0-3
 };
 
 static const struct iio_chan_spec_ext_info rx1_fmc_status_info[] = {
@@ -553,14 +572,14 @@ static const struct iio_chan_spec_ext_info rx1_fmc_status_info[] = {
     _RX1_EXT_INFO("TempAlert", 3, NULL, rx1_fmc_status_read),
     _RX1_EXT_INFO("PWRvalid", 4, NULL, rx1_fmc_status_read),
     _RX1_EXT_INFO("PWRalert", 5, NULL, rx1_fmc_status_read),
-    _RX1_EXT_INFO("STATUS", 6, NULL, rx1_fmc_status_read),{},
+    _RX1_EXT_INFO("STATUS", 6, NULL, rx1_fmc_status_read), {},
 };
 
 static const struct iio_chan_spec_ext_info rx1_pwr_measure_ext_info[] = {
     _RX1_EXT_INFO("pwrMeanCh0", 0, NULL, rx1_pwr_measure_read),
     _RX1_EXT_INFO("pwrMeanCh1", 1, NULL, rx1_pwr_measure_read),
     _RX1_EXT_INFO("pwrPeakCh0", 2, NULL, rx1_pwr_measure_read),
-    _RX1_EXT_INFO("pwrPeakCh1", 3, NULL, rx1_pwr_measure_read),{},
+    _RX1_EXT_INFO("pwrPeakCh1", 3, NULL, rx1_pwr_measure_read), {},
 };
 
 static const struct iio_chan_spec_ext_info rx1_if_freq_ext_info[] = {
@@ -607,12 +626,12 @@ static const struct iio_chan_spec rx1_chan[NUM_CHANNELS] = {
         .indexed = 1,
         .output = 0,
         .ext_info = rx1_pwr_measure_ext_info,},
-   {.type = IIO_ALTVOLTAGE,
+    {.type = IIO_ALTVOLTAGE,
         .channel = 7,
         .indexed = 1,
         .output = 1,
         .ext_info = rx1_if_freq_ext_info,},
-   {.type = IIO_ALTVOLTAGE,
+    {.type = IIO_ALTVOLTAGE,
         .channel = 8,
         .indexed = 1,
         .output = 0,
