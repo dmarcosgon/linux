@@ -40,7 +40,6 @@ const unsigned int gaincodes[37] = {
     32382, 36333, 40766, 45740, 51322, 57584,
     64610
 };
-char *colors[8] = {"off", "green", "red", "yellow", "blue", "cyan", "purple", "white"};
 
 struct rx2_platform_data {
     unsigned long *base_addr;
