@@ -18,6 +18,11 @@ config RX1
 	help
 	  Say yes here to build support for RX1 rf configuration
 
+config RX2
+	tristate "RX2 config"
+	help
+	  Say yes here to build support for RX2 rf configuration
+
 config RX1_DEMOD
 	tristate "RX1 demodulator control"
 	help
