@@ -23,6 +23,11 @@ config RX2
 	help
 	  Say yes here to build support for RX2 rf configuration
 
+config I2C_CPLD_BRIDGE
+	tristate "I2C-CPLD-BRIDGE config"
+	help
+	  Say yes here to build support for I2C-CPLD-BRIDGE configuration
+
 config RX1_DEMOD
 	tristate "RX1 demodulator control"
 	help

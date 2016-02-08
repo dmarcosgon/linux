@@ -1,0 +1,702 @@
+/*
+ * i2c-cpld-bridge
+ *
+ * Copyright 2016 GR UPM
+ *
+ * Licensed under the GPL-2.
+ */
+
+#include <linux/device.h>
+#include <linux/kernel.h>
+#include <linux/slab.h>
+#include <linux/sysfs.h>
+
+#include <linux/err.h>
+#include <linux/module.h>
+#include <linux/bitrev.h>
+
+#include <linux/delay.h>
+#include <linux/iio/iio.h>
+#include <linux/iio/sysfs.h>
+#include <asm/io.h>
+#include <linux/i2c.h>
+
+#define NUM_CHANNELS 8
+
+#define REG_FIELD_MASK(offset, size) (((1<<(size))-1) << (offset))
+#define REG_FIELD_WRITE(value, offset, size) (((value) & ((1<<(size))-1)) << (offset))
+#define REG_FIELD_READ(reg, offset, size) (((reg) >> (offset)) & ((1<<(size))-1))
+#define REG_SIGN_EXTEND(value, bits) (((value) & (1<<bits) ? ~((1<<(bits))-1): 0 ) | (value))
+
+/* definitions for register: RF control */
+#define GPIO_RF_ADDRESS						  0
+/* definitions for field: RF_SWOL in reg: RF control */
+#define GPIO_RF_SWOL_SHIFT                    0
+/* definitions for field: RF_SWBAND in reg: RF control */
+#define GPIO_RF_SWBAND_SHIFT                  1
+/* definitions for field: RF_SWSC_CTRL in reg: RF control */
+#define GPIO_RF_SWSC_SHIFT                    3
+/* definitions for field: RF_SWIN_CTRL in reg: RF control */
+#define GPIO_RF_SWIN_SHIFT					  4
+/* definitions for field: RF_SWC_CTRL in reg: RF control */
+#define GPIO_RF_SWC_SHIFT					  5	
+/* definitions for field: IQ_LO_BSEL in reg: RF control */
+#define GPIO_RF_IQLO_BSEL_SHIFT               6
+
+/* definitions for register: POWER control */
+#define GPIO_PWR_ADDRESS					  1
+/* definitions for field: RF_LNA2_EN in reg: POWER control */
+#define GPIO_PWR_LNA2_EN_SHIFT                0
+/* definitions for field: LF_OL_CE in reg: POWER control */
+#define GPIO_PWR_LFOL_CE_SHIFT                1
+/* definitions for field: SF_OL_CE in reg: POWER control */
+#define GPIO_PWR_SCOL_CE_SHIFT                2
+/* definitions for field: Int.REF enable  in reg: POWER control */
+#define GPIO_PWR_INTREF_DIS_SHIFT             3
+/* definitions for field: RFHF power enable in reg: POWER control */
+#define GPIO_PWR_RFHF_PWREN_SHIFT             4
+/* definitions for field: RFLF power enable in reg: POWER control */
+#define GPIO_PWR_RFLF_PWREN_SHIFT             5
+/* definitions for field: ADC_PDWN_1V8 in reg: POWER control */
+#define GPIO_PWR_ADC_PDWN_SHIFT               6
+
+/* definitions for register: SYNC control */
+#define GPIO_SYNC_ADDRESS					  2
+/* definitions for field: PLL_RESET in reg: SYNC control */
+#define GPIO_SYNC_PLL_RESET_SHIFT             0
+/* definitions for field: PLL_SYNC in reg: SYNC control */
+#define GPIO_SYNC_PLL_SYNC_SHIFT              1
+/* definitions for field: ADC_SYNC in reg: SYNC control */
+#define GPIO_SYNC_ADC_SYNC_SHIFT              2
+
+/* definitions for register: External IO */
+#define GPIO_EXTIO_ADDRESS					  3
+/* definitions for field: External IO in reg: External IO */
+#define GPIO_EXTIO_EXTIO_SHIFT                0
+
+/* definitions for register: Geographical Address REG */
+#define GPIO_GA_ADDRESS					  	  4
+/* definitions for field: GAddress in reg: Geographical Address REG */
+#define GPIO_GA_GA_SHIFT                      0
+
+/* definitions for register: LMK04281 PLL SEL */
+#define GPIO_PLL_SEL_ADDRESS				  5
+/* definitions for field: PLL SEL in reg: LMK04281 PLL SEL */
+#define GPIO_PLL_SEL_PLLSEL_SHIFT             0
+
+/* definitions for register: RF_PWR_Ch0_MSB */
+#define GPIO_RF_PWR_Ch0_MSB_ADDRESS			  6
+/* definitions for register: RF_PWR_Ch0_LSB */
+#define GPIO_RF_PWR_Ch0_LSB_ADDRESS			  7
+/* definitions for register: RF_PWR_Ch1_MSB */
+#define GPIO_RF_PWR_Ch1_MSB_ADDRESS			  8
+/* definitions for register: RF_PWR_Ch1_LSB */
+#define GPIO_RF_PWR_Ch1_LSB_ADDRESS			  9
+
+
+struct i2c_cpld_bridge_state {
+	unsigned int rf_swol;
+	unsigned int rf_swband;
+	unsigned int rf_swsc;
+	unsigned int rf_swin;
+	unsigned int rf_swc;
+	unsigned int rf_iqlo_bsel;
+	unsigned int pwr_lna2_en;
+	unsigned int pwr_lfol_ce;
+	unsigned int pwr_scol_ce;
+	unsigned int pwr_intref_dis;
+	unsigned int pwr_rfhf_pwren;
+	unsigned int pwr_rflf_pwren;
+	unsigned int pwr_adc_pdwn;
+	unsigned int sync_pll_reset;
+	unsigned int sync_pll_sync;
+	unsigned int sync_adc_sync;
+	unsigned int extio;
+	unsigned int ga_address;
+	unsigned int lmk04281_pll_sel;
+	unsigned int pwrMeanCh0;
+	unsigned int pwrMeanCh1;
+    struct i2c_cpld_bridge_data* pdata;
+};
+
+struct i2c_cpld_bridge_data  {
+	struct i2c_client *client;
+	struct mutex lock;
+	struct i2c_cpld_bridge_state* st;
+	int int_time;
+};
+
+
+static ssize_t rf_control_write(struct iio_dev *indio_dev,
+	uintptr_t private,
+    const struct iio_chan_spec *chan,
+    const char *buf, size_t len) {
+
+    unsigned long long readin;
+    struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);
+    int ret = 0;
+    unsigned char regval = 0;
+
+    ret = kstrtoull(buf, 10, &readin);
+    if (ret)
+        return ret;
+    mutex_lock(&indio_dev->mlock);
+
+	switch ((u32) private) {
+        case 0:
+            if (readin < 0 || readin > 1) ret = -EINVAL;
+            else data->st->rf_swol = readin;
+            break;
+        case 1:
+            if (readin < 1 || readin > 3)ret = -EINVAL;
+            else data->st->rf_swband = readin;
+            break;
+        case 2:
+            if (readin < 0 || readin > 1)ret = -EINVAL;
+            else data->st->rf_swsc = readin;           
+            break;
+        case 3:
+            if (readin < 0 || readin > 1)ret = -EINVAL;
+            else data->st->rf_swin = readin;            
+            break;
+        case 4:
+            if (readin < 0 || readin > 1)ret = -EINVAL;
+            else data->st->rf_swc = readin;  
+            break;
+        case 5:
+            if (readin < 1 || readin > 3)ret = -EINVAL;
+            else data->st->rf_iqlo_bsel = readin;
+            break;
+        default:
+            ret = -EINVAL;
+    }
+
+	if (!ret) {
+		regval |= REG_FIELD_WRITE(data->st->rf_swol,0,1);
+        regval |= REG_FIELD_WRITE(data->st->rf_swband,GPIO_RF_SWBAND_SHIFT,2);
+        regval |= REG_FIELD_WRITE(data->st->rf_swsc,GPIO_RF_SWSC_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->st->rf_swin,GPIO_RF_SWIN_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->st->rf_swc,GPIO_RF_SWC_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->st->rf_iqlo_bsel,GPIO_RF_IQLO_BSEL_SHIFT,2);
+		
+		i2c_smbus_write_byte_data(data->client,GPIO_RF_ADDRESS,regval);
+	}
+	mutex_unlock(&indio_dev->mlock);
+
+	return ret ? ret : len;
+}
+
+
+static ssize_t rf_control_read(struct iio_dev *indio_dev,
+        uintptr_t private,
+        const struct iio_chan_spec *chan,
+        char *buf) {
+
+	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);
+    int ret = 0;
+    mutex_lock(&indio_dev->mlock);
+    switch ((u32) private) {
+		case 0:
+			ret = sprintf(buf, "%s\n", data->st->rf_swol ? "SC Low" : "SC High");
+			break;
+        case 1:
+            switch (data->st->rf_swband) {
+                case 1:
+                    ret = sprintf(buf, "%s\n", "Low band");
+                    break;
+                case 2:
+                    ret = sprintf(buf, "%s\n", "50 Ohm Load");
+                    break;
+                case 3:
+                    ret = sprintf(buf, "%s\n", "High band");
+                    break;
+            }
+            break;
+        case 2:
+            ret = sprintf(buf, "%s\n", data->st->rf_swsc ? "SC RF chain" : "SC Cal.out");
+            break;
+        case 3:
+            ret = sprintf(buf, "%s\n", data->st->rf_swin ? "RF In" : "Cal.In");
+            break;
+        case 4:
+            ret = sprintf(buf, "%s\n", data->st->rf_swc ? "Low band" : "High band");
+            break;
+        case 5:
+            switch (data->st->rf_iqlo_bsel) {
+                case 1:
+                    ret = sprintf(buf, "%s\n", "DC-830 MHz");
+                    break;
+                case 2:
+                    ret = sprintf(buf, "%s\n", "DC-2.25GHz");
+                    break;
+                case 3:
+                    ret = sprintf(buf, "%s\n", "DC-4GHz");
+                    break;
+            }
+            break;
+        default:
+            ret = -EINVAL;
+    }
+    mutex_unlock(&indio_dev->mlock);
+    return ret;
+}
+
+static ssize_t pwr_control_write(struct iio_dev *indio_dev,
+	uintptr_t private,
+    const struct iio_chan_spec *chan,
+    const char *buf, size_t len) {
+
+ 	unsigned long long readin;
+    struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);
+    int ret = 0;
+    unsigned char regval = 0;
+
+    ret = kstrtoull(buf, 10, &readin);
+    if (ret)
+        return ret;
+    mutex_lock(&indio_dev->mlock);
+
+	switch ((u32) private) {
+        case 0:
+            if (readin < 0 || readin > 1) ret = -EINVAL;
+            else data->st->pwr_lna2_en = readin;
+            break;
+        case 1:
+            if (readin < 0 || readin > 1)ret = -EINVAL;
+            else data->st->pwr_lfol_ce = readin;
+            break;
+        case 2:
+            if (readin < 0 || readin > 1)ret = -EINVAL;
+            else data->st->pwr_scol_ce = readin;           
+            break;
+        case 3:
+            if (readin < 0 || readin > 1)ret = -EINVAL;
+            else data->st->pwr_intref_dis = readin;            
+            break;
+        case 4:
+            if (readin < 0 || readin > 1)ret = -EINVAL;
+            else data->st->pwr_rfhf_pwren = readin;  
+            break;
+        case 5:
+            if (readin < 0 || readin > 1)ret = -EINVAL;
+            else data->st->pwr_rflf_pwren = readin;
+            break;
+        case 6:
+            if (readin < 0 || readin > 1)ret = -EINVAL;
+            else data->st->pwr_adc_pdwn = readin;
+            break;
+        default:
+            ret = -EINVAL;
+    }
+
+	if (!ret) {
+		regval |= REG_FIELD_WRITE(data->st->pwr_lna2_en ,GPIO_PWR_LNA2_EN_SHIFT,1);
+        regval |= REG_FIELD_WRITE(data->st->pwr_lfol_ce,GPIO_PWR_LFOL_CE_SHIFT,1);
+        regval |= REG_FIELD_WRITE(data->st->pwr_scol_ce,GPIO_PWR_SCOL_CE_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->st->pwr_intref_dis,GPIO_PWR_INTREF_DIS_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->st->pwr_rfhf_pwren,GPIO_PWR_RFHF_PWREN_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->st->pwr_rflf_pwren,GPIO_PWR_RFLF_PWREN_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->st->pwr_adc_pdwn,GPIO_PWR_ADC_PDWN_SHIFT,1);
+
+		i2c_smbus_write_byte_data(data->client,GPIO_PWR_ADDRESS,regval);
+	}
+	mutex_unlock(&indio_dev->mlock);
+
+	return ret ? ret : len;
+
+}
+
+static ssize_t pwr_control_read(struct iio_dev *indio_dev,
+        uintptr_t private,
+        const struct iio_chan_spec *chan,
+        char *buf) {
+
+	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);
+    int ret = 0;
+    mutex_lock(&indio_dev->mlock);
+    switch ((u32) private) {
+		case 0:
+			ret = sprintf(buf, "%s\n", data->st->pwr_lna2_en ? "Bypass" : "Enabled");
+			break;
+        case 1:
+			ret = sprintf(buf, "%s\n", data->st->pwr_lfol_ce ? "Disabled" : "Enabled");
+            break;
+        case 2:
+            ret = sprintf(buf, "%s\n", data->st->pwr_scol_ce ? "Disabled" : "Enabled");
+            break;
+        case 3:
+            ret = sprintf(buf, "%s\n", data->st->pwr_intref_dis ? "Disabled" : "Enabled");
+            break;
+        case 4:
+            ret = sprintf(buf, "%s\n", data->st->pwr_rfhf_pwren ? "Disabled" : "Enabled");
+            break;
+        case 5:
+            ret = sprintf(buf, "%s\n", data->st->pwr_rflf_pwren ? "Disabled" : "Enabled");
+            break;
+        case 6:
+            ret = sprintf(buf, "%s\n", data->st->pwr_adc_pdwn ? "Power up" : "Power down");
+            break;
+        default:
+            ret = -EINVAL;
+    }
+    mutex_unlock(&indio_dev->mlock);
+    return ret;
+
+}
+
+static ssize_t sync_control_write(struct iio_dev *indio_dev,
+	uintptr_t private,
+    const struct iio_chan_spec *chan,
+    const char *buf, size_t len) {
+
+	unsigned long long readin;
+    struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);
+    int ret = 0;
+    unsigned char regval = 0;
+
+    ret = kstrtoull(buf, 10, &readin);
+    if (ret)
+        return ret;
+    mutex_lock(&indio_dev->mlock);
+
+	switch ((u32) private) {
+        case 0:
+            if (readin < 0 || readin > 1) ret = -EINVAL;
+            else data->st->sync_pll_reset = readin;
+            break;
+        case 1:
+            if (readin < 0 || readin > 1)ret = -EINVAL;
+            else data->st->sync_pll_sync = readin;
+            break;
+        case 2:
+            if (readin < 0 || readin > 1)ret = -EINVAL;
+            else data->st->sync_adc_sync = readin;           
+            break;
+        default:
+            ret = -EINVAL;
+    }
+
+	if (!ret) {
+		regval |= REG_FIELD_WRITE(data->st->sync_pll_reset,GPIO_SYNC_PLL_RESET_SHIFT,1);
+        regval |= REG_FIELD_WRITE(data->st->sync_pll_sync,GPIO_SYNC_PLL_SYNC_SHIFT,1);
+        regval |= REG_FIELD_WRITE(data->st->sync_adc_sync,GPIO_SYNC_ADC_SYNC_SHIFT,1);
+
+		i2c_smbus_write_byte_data(data->client,GPIO_SYNC_ADDRESS,regval);
+	}
+	mutex_unlock(&indio_dev->mlock);
+
+	return ret ? ret : len;
+
+}
+
+static ssize_t sync_control_read(struct iio_dev *indio_dev,
+        uintptr_t private,
+        const struct iio_chan_spec *chan,
+        char *buf) {
+
+	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);
+    int ret = 0;
+    mutex_lock(&indio_dev->mlock);
+    switch ((u32) private) {
+		case 0:
+			ret = sprintf(buf, "%s\n", data->st->sync_pll_reset ? "PLL on" : "Reset");
+			break;
+        case 1:
+			ret = sprintf(buf, "%s\n", data->st->sync_pll_sync ? "Unused" : "Sync");
+            break;
+        case 2:
+            ret = sprintf(buf, "%s\n", data->st->sync_adc_sync ? "Unused" : "Sync");
+            break;
+        default:
+            ret = -EINVAL;
+    }
+    mutex_unlock(&indio_dev->mlock);
+    return ret;
+
+}
+
+static ssize_t extio_control_write(struct iio_dev *indio_dev,
+	uintptr_t private,
+    const struct iio_chan_spec *chan,
+    const char *buf, size_t len) {
+
+	unsigned long long readin;
+    struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);
+    int ret = 0;
+    unsigned char regval = 0;
+
+    ret = kstrtoull(buf, 10, &readin);
+    if (ret)
+        return ret;
+    mutex_lock(&indio_dev->mlock);
+
+	switch ((u32) private) {
+        case 0:
+            if (readin < 0 || readin > 7) ret = -EINVAL;
+            else data->st->extio= readin;
+            break;
+        default:
+            ret = -EINVAL;
+    }
+
+	if (!ret) {
+		regval |= REG_FIELD_WRITE(data->st->extio,GPIO_EXTIO_EXTIO_SHIFT,4);
+		i2c_smbus_write_byte_data(data->client,GPIO_EXTIO_ADDRESS,regval);
+	}
+	mutex_unlock(&indio_dev->mlock);
+
+	return ret ? ret : len;
+
+}
+
+static ssize_t extio_control_read(struct iio_dev *indio_dev,
+        uintptr_t private,
+        const struct iio_chan_spec *chan,
+        char *buf) {
+
+	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);
+    int ret = 0;
+    mutex_lock(&indio_dev->mlock);
+    switch ((u32) private) {
+		case 0:
+			ret = sprintf(buf, "%d\n", data->st->extio);
+			break;
+        default:
+            ret = -EINVAL;
+    }
+    mutex_unlock(&indio_dev->mlock);
+    return ret;
+}
+
+static ssize_t ga_read(struct iio_dev *indio_dev,
+        uintptr_t private,
+        const struct iio_chan_spec *chan,
+        char *buf) {
+
+	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);	
+	int ret = i2c_smbus_read_byte_data(data->client, GPIO_GA_ADDRESS);
+	if (ret < 0)
+		return ret;
+    mutex_lock(&indio_dev->mlock);
+    switch ((u32) private) {
+		case 0:
+			data->st->ga_address = (unsigned int)ret;
+			ret = sprintf(buf, "%d\n", data->st->ga_address);
+			break;
+        default:
+            ret = -EINVAL;
+    }
+    mutex_unlock(&indio_dev->mlock);
+    return ret;
+}
+
+static ssize_t pll_sel_read(struct iio_dev *indio_dev,
+        uintptr_t private,
+        const struct iio_chan_spec *chan,
+        char *buf) {
+
+	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);	
+	int ret = i2c_smbus_read_byte_data(data->client, GPIO_PLL_SEL_ADDRESS);
+	if (ret < 0)
+		return ret;
+    mutex_lock(&indio_dev->mlock);
+    switch ((u32) private) {
+		case 0:
+			data->st->lmk04281_pll_sel = (unsigned int)ret;
+			ret = sprintf(buf, "%d\n", data->st->lmk04281_pll_sel);
+			break;
+        default:
+            ret = -EINVAL;
+    }
+    mutex_unlock(&indio_dev->mlock);
+    return ret;
+}
+
+static ssize_t pwr_measure_read(struct iio_dev *indio_dev,
+        uintptr_t private,
+        const struct iio_chan_spec *chan,
+        char *buf) {
+	int ret = 0;
+	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);	
+    mutex_lock(&indio_dev->mlock);
+    switch ((u32) private) {
+		case 0:
+			ret = i2c_smbus_read_byte_data(data->client, GPIO_RF_PWR_Ch0_MSB_ADDRESS);
+			ret <<= 8;
+			ret |= i2c_smbus_read_byte_data(data->client, GPIO_RF_PWR_Ch0_LSB_ADDRESS);
+			data->st->pwrMeanCh0 = (unsigned int)ret;
+			ret = sprintf(buf, "%d\n", data->st->pwrMeanCh0);
+			break;
+		case 1:
+			ret = i2c_smbus_read_byte_data(data->client, GPIO_RF_PWR_Ch1_MSB_ADDRESS);
+			ret <<= 8;
+			ret |= i2c_smbus_read_byte_data(data->client, GPIO_RF_PWR_Ch1_LSB_ADDRESS);
+			data->st->pwrMeanCh1 = (unsigned int)ret;
+			ret = sprintf(buf, "%d\n", data->st->pwrMeanCh1);
+			break;
+        default:
+            ret = -EINVAL;
+    }
+    mutex_unlock(&indio_dev->mlock);
+    return ret;
+}
+
+#define _I2C_CPLD_BRIDGE_EXT_INFO(_name, _ident, _write, _read) { \
+	.name = _name, \
+	.read = _read, \
+	.write = _write, \
+	.private = _ident, \
+	.shared = IIO_SEPARATE, \
+}
+
+static const struct iio_chan_spec_ext_info rf_control_ext_info[] = {
+    _I2C_CPLD_BRIDGE_EXT_INFO("swol", 0, rf_control_write,  rf_control_read),  		//0
+	_I2C_CPLD_BRIDGE_EXT_INFO("swband", 1, rf_control_write, rf_control_read), 		//1-2
+    _I2C_CPLD_BRIDGE_EXT_INFO("swsc", 2, rf_control_write, rf_control_read), 		//3
+    _I2C_CPLD_BRIDGE_EXT_INFO("swin", 3, rf_control_write, rf_control_read), 		//4
+    _I2C_CPLD_BRIDGE_EXT_INFO("swc", 4, rf_control_write, rf_control_read), 		//5
+	_I2C_CPLD_BRIDGE_EXT_INFO("iqlo_bsel", 5, rf_control_write, rf_control_read), 	//6-7
+    {},
+};
+
+static const struct iio_chan_spec_ext_info pwr_control_ext_info[] = {
+    _I2C_CPLD_BRIDGE_EXT_INFO("lna2_en", 0, pwr_control_write,  pwr_control_read),  	//0
+	_I2C_CPLD_BRIDGE_EXT_INFO("lfol_ce", 1, pwr_control_write, pwr_control_read), 		//1
+    _I2C_CPLD_BRIDGE_EXT_INFO("scol_ce", 2, pwr_control_write, pwr_control_read), 		//2
+    _I2C_CPLD_BRIDGE_EXT_INFO("intref_dis", 3, pwr_control_write, pwr_control_read), 	//3
+    _I2C_CPLD_BRIDGE_EXT_INFO("rfhf_pwren", 4, pwr_control_write, pwr_control_read), 	//4
+	_I2C_CPLD_BRIDGE_EXT_INFO("rflf_pwren", 5, pwr_control_write, pwr_control_read), 	//5
+	_I2C_CPLD_BRIDGE_EXT_INFO("adc_pdwn", 6, pwr_control_write, pwr_control_read), 		//6
+    {},
+};
+
+static const struct iio_chan_spec_ext_info sync_control_ext_info[] = {
+    _I2C_CPLD_BRIDGE_EXT_INFO("pll_reset", 0, sync_control_write,  sync_control_read),  	//0
+	_I2C_CPLD_BRIDGE_EXT_INFO("pll_sync", 1, sync_control_write, sync_control_read), 		//1
+    _I2C_CPLD_BRIDGE_EXT_INFO("adc_sync", 2, sync_control_write, sync_control_read), 		//2
+    {},
+};
+
+static const struct iio_chan_spec_ext_info extio_control_ext_info[] = {
+    _I2C_CPLD_BRIDGE_EXT_INFO("ext_io", 0, extio_control_write,  extio_control_read),  	//0
+    {},
+};
+
+
+static const struct iio_chan_spec_ext_info ga_ext_info[] = {
+    _I2C_CPLD_BRIDGE_EXT_INFO("ga", 0, NULL,  ga_read),  	//0
+    {},
+};
+
+static const struct iio_chan_spec_ext_info LMK04281_PLL_SEL_ext_info[] = {
+    _I2C_CPLD_BRIDGE_EXT_INFO("lmk04281_pll_sel", 0, NULL,  pll_sel_read),  	//0
+    {},
+};
+
+static const struct iio_chan_spec_ext_info pwr_measure_ext_info[] = {
+    _I2C_CPLD_BRIDGE_EXT_INFO("pwr_ch0", 0, NULL,  pwr_measure_read),  	//0
+	_I2C_CPLD_BRIDGE_EXT_INFO("pwr_ch1", 1, NULL,  pwr_measure_read),  	//0
+    {},
+};
+
+static const struct iio_chan_spec i2c_cpld_bridge_chan[NUM_CHANNELS] = {
+    {.type = IIO_ALTVOLTAGE,
+        .channel = 0,
+        .indexed = 1,
+        .output = 1,
+        .ext_info = rf_control_ext_info,},
+ 	{.type = IIO_ALTVOLTAGE,
+        .channel = 1,
+        .indexed = 1,
+        .output = 1,
+        .ext_info = pwr_control_ext_info,},
+	{.type = IIO_ALTVOLTAGE,
+        .channel = 2,
+        .indexed = 1,
+        .output = 1,
+        .ext_info = sync_control_ext_info,},
+	{.type = IIO_ALTVOLTAGE,
+        .channel = 3,
+        .indexed = 1,
+        .output = 1,
+        .ext_info = extio_control_ext_info,},
+	{.type = IIO_ALTVOLTAGE,
+        .channel = 4,
+        .indexed = 1,
+        .output = 1,
+        .ext_info = ga_ext_info,},
+	{.type = IIO_ALTVOLTAGE,
+        .channel = 5,
+        .indexed = 1,
+        .output = 1,
+        .ext_info = LMK04281_PLL_SEL_ext_info,},
+	{.type = IIO_ALTVOLTAGE,
+        .channel = 6,
+        .indexed = 1,
+        .output = 1,
+        .ext_info = pwr_measure_ext_info,},
+};
+
+static const struct iio_info i2c_cpld_bridge_info = {
+	//.read_raw = mlx90614_read_raw,
+	.driver_module = THIS_MODULE,
+};
+
+static int i2c_cpld_bridge_probe(struct i2c_client *client,
+								 const struct i2c_device_id *id) {
+
+	struct iio_dev *indio_dev;
+	struct i2c_cpld_bridge_data *data;
+
+	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*data));
+	if (!indio_dev)
+		return -ENOMEM;
+
+	data = iio_priv(indio_dev);
+	i2c_set_clientdata(client, indio_dev);
+	data->client = client;
+	mutex_init(&data->lock);
+
+	indio_dev->dev.parent = &client->dev;
+	indio_dev->name = id->name;
+	indio_dev->modes = INDIO_DIRECT_MODE;
+	indio_dev->info = &i2c_cpld_bridge_info;
+
+	indio_dev->channels = i2c_cpld_bridge_chan;
+	indio_dev->num_channels = ARRAY_SIZE(i2c_cpld_bridge_chan);
+
+	return 0;
+}
+
+static int i2c_cpld_bridge_remove(struct i2c_client *client) {
+  	
+	iio_device_unregister(i2c_get_clientdata(client));
+
+  	return 0;
+}
+
+
+#ifdef CONFIG_OF
+static const struct i2c_device_id i2c_cpld_bridge_id[] = {
+	{ "i2c_cpld_bridge", 0 },
+	{ }
+};
+MODULE_DEVICE_TABLE(i2c, i2c_cpld_bridge_id);
+#endif
+
+static struct i2c_driver i2c_cpld_bridge_driver = {
+    .driver =
+    {
+        .name = "i2c_cpld_bridge",
+        .owner = THIS_MODULE,
+    },
+    .probe = i2c_cpld_bridge_probe,
+    .remove = i2c_cpld_bridge_remove,
+	.id_table = i2c_cpld_bridge_id,
+};
+
+module_i2c_driver(i2c_cpld_bridge_driver);
+
+MODULE_AUTHOR("Luis Cuéllar  <luiscn@gr.ssr.upm.es>");
+MODULE_DESCRIPTION("I2C TO CPLD GPIO BRIDGE ");
+MODULE_LICENSE("GPL v2");

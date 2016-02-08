@@ -21,7 +21,7 @@
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
 #include <asm/io.h>
-#define NUM_CHANNELS 9
+#define NUM_CHANNELS 8
 #define GAIN_STEPS 37
 
 #define FMC_PLL_STATUS		1
