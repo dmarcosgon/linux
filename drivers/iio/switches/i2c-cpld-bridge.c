@@ -6,20 +6,21 @@
  * Licensed under the GPL-2.
  */
 
-#include <linux/device.h>
+
 #include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/delay.h>
+#include <linux/i2c.h>
+#include <linux/device.h>
 #include <linux/slab.h>
 #include <linux/sysfs.h>
-
 #include <linux/err.h>
 #include <linux/module.h>
 #include <linux/bitrev.h>
-
-#include <linux/delay.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
 #include <asm/io.h>
-#include <linux/i2c.h>
+
 
 #define NUM_CHANNELS 8
 
@@ -93,8 +94,12 @@
 /* definitions for register: RF_PWR_Ch1_LSB */
 #define GPIO_RF_PWR_Ch1_LSB_ADDRESS			  9
 
-
-struct i2c_cpld_bridge_state {
+struct i2c_cpld_bridge_data  {
+	struct i2c_client *client;
+	unsigned long devid;
+	struct mutex lock;
+	//struct i2c_cpld_bridge_state* st;
+	int int_time;
 	unsigned int rf_swol;
 	unsigned int rf_swband;
 	unsigned int rf_swsc;
@@ -116,14 +121,6 @@ struct i2c_cpld_bridge_state {
 	unsigned int lmk04281_pll_sel;
 	unsigned int pwrMeanCh0;
 	unsigned int pwrMeanCh1;
-    struct i2c_cpld_bridge_data* pdata;
-};
-
-struct i2c_cpld_bridge_data  {
-	struct i2c_client *client;
-	struct mutex lock;
-	struct i2c_cpld_bridge_state* st;
-	int int_time;
 };
 
 
@@ -145,41 +142,43 @@ static ssize_t rf_control_write(struct iio_dev *indio_dev,
 	switch ((u32) private) {
         case 0:
             if (readin < 0 || readin > 1) ret = -EINVAL;
-            else data->st->rf_swol = readin;
+            else data->rf_swol = readin;
             break;
         case 1:
             if (readin < 1 || readin > 3)ret = -EINVAL;
-            else data->st->rf_swband = readin;
+            else data->rf_swband = readin;
             break;
         case 2:
             if (readin < 0 || readin > 1)ret = -EINVAL;
-            else data->st->rf_swsc = readin;           
+            else data->rf_swsc = readin;           
             break;
         case 3:
             if (readin < 0 || readin > 1)ret = -EINVAL;
-            else data->st->rf_swin = readin;            
+            else data->rf_swin = readin;            
             break;
         case 4:
             if (readin < 0 || readin > 1)ret = -EINVAL;
-            else data->st->rf_swc = readin;  
+            else data->rf_swc = readin;  
             break;
         case 5:
             if (readin < 1 || readin > 3)ret = -EINVAL;
-            else data->st->rf_iqlo_bsel = readin;
+            else data->rf_iqlo_bsel = readin;
             break;
         default:
             ret = -EINVAL;
     }
 
 	if (!ret) {
-		regval |= REG_FIELD_WRITE(data->st->rf_swol,0,1);
-        regval |= REG_FIELD_WRITE(data->st->rf_swband,GPIO_RF_SWBAND_SHIFT,2);
-        regval |= REG_FIELD_WRITE(data->st->rf_swsc,GPIO_RF_SWSC_SHIFT,1);
-		regval |= REG_FIELD_WRITE(data->st->rf_swin,GPIO_RF_SWIN_SHIFT,1);
-		regval |= REG_FIELD_WRITE(data->st->rf_swc,GPIO_RF_SWC_SHIFT,1);
-		regval |= REG_FIELD_WRITE(data->st->rf_iqlo_bsel,GPIO_RF_IQLO_BSEL_SHIFT,2);
-		
+		regval |= REG_FIELD_WRITE(data->rf_swol,0,1);
+        regval |= REG_FIELD_WRITE(data->rf_swband,GPIO_RF_SWBAND_SHIFT,2);
+        regval |= REG_FIELD_WRITE(data->rf_swsc,GPIO_RF_SWSC_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->rf_swin,GPIO_RF_SWIN_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->rf_swc,GPIO_RF_SWC_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->rf_iqlo_bsel,GPIO_RF_IQLO_BSEL_SHIFT,2);
+
 		i2c_smbus_write_byte_data(data->client,GPIO_RF_ADDRESS,regval);
+
+
 	}
 	mutex_unlock(&indio_dev->mlock);
 
@@ -194,13 +193,18 @@ static ssize_t rf_control_read(struct iio_dev *indio_dev,
 
 	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);
     int ret = 0;
+	char data_read;
+	i2c_smbus_write_byte(data->client,GPIO_RF_ADDRESS);
+	data_read = i2c_smbus_read_byte(data->client);
     mutex_lock(&indio_dev->mlock);
     switch ((u32) private) {
 		case 0:
-			ret = sprintf(buf, "%s\n", data->st->rf_swol ? "SC Low" : "SC High");
+			data->rf_swol = data_read & 0x1;
+			ret = sprintf(buf, "%s\n", data->rf_swol ? "SC Low" : "SC High");
 			break;
         case 1:
-            switch (data->st->rf_swband) {
+			data->rf_swband = REG_FIELD_READ(data_read, GPIO_RF_SWBAND_SHIFT , 2); 
+            switch (data->rf_swband) {
                 case 1:
                     ret = sprintf(buf, "%s\n", "Low band");
                     break;
@@ -213,24 +217,28 @@ static ssize_t rf_control_read(struct iio_dev *indio_dev,
             }
             break;
         case 2:
-            ret = sprintf(buf, "%s\n", data->st->rf_swsc ? "SC RF chain" : "SC Cal.out");
+			data->rf_swsc = REG_FIELD_READ(data_read, GPIO_RF_SWSC_SHIFT , 1); 
+            ret = sprintf(buf, "%s\n", data->rf_swsc ? "SC Cal.out" :"SC RF chain");
             break;
         case 3:
-            ret = sprintf(buf, "%s\n", data->st->rf_swin ? "RF In" : "Cal.In");
+			data->rf_swin = REG_FIELD_READ(data_read, GPIO_RF_SWIN_SHIFT , 1); 
+            ret = sprintf(buf, "%s\n", data->rf_swin ? "Cal.In" : "RF In" );
             break;
         case 4:
-            ret = sprintf(buf, "%s\n", data->st->rf_swc ? "Low band" : "High band");
+			data->rf_swc = REG_FIELD_READ(data_read, GPIO_RF_SWC_SHIFT , 1);
+            ret = sprintf(buf, "%s\n", data->rf_swc ? "Low band" : "High band" );
             break;
         case 5:
-            switch (data->st->rf_iqlo_bsel) {
+			data->rf_iqlo_bsel = REG_FIELD_READ(data_read, GPIO_RF_IQLO_BSEL_SHIFT , 2);
+            switch (data->rf_iqlo_bsel) {
                 case 1:
                     ret = sprintf(buf, "%s\n", "DC-830 MHz");
                     break;
                 case 2:
-                    ret = sprintf(buf, "%s\n", "DC-2.25GHz");
+                    ret = sprintf(buf, "%s\n", "830-2.25GHz");
                     break;
                 case 3:
-                    ret = sprintf(buf, "%s\n", "DC-4GHz");
+                    ret = sprintf(buf, "%s\n", "2.25-4GHz");
                     break;
             }
             break;
@@ -259,44 +267,44 @@ static ssize_t pwr_control_write(struct iio_dev *indio_dev,
 	switch ((u32) private) {
         case 0:
             if (readin < 0 || readin > 1) ret = -EINVAL;
-            else data->st->pwr_lna2_en = readin;
+            else data->pwr_lna2_en = readin;
             break;
         case 1:
             if (readin < 0 || readin > 1)ret = -EINVAL;
-            else data->st->pwr_lfol_ce = readin;
+            else data->pwr_lfol_ce = readin;
             break;
         case 2:
             if (readin < 0 || readin > 1)ret = -EINVAL;
-            else data->st->pwr_scol_ce = readin;           
+            else data->pwr_scol_ce = readin;           
             break;
         case 3:
             if (readin < 0 || readin > 1)ret = -EINVAL;
-            else data->st->pwr_intref_dis = readin;            
+            else data->pwr_intref_dis = readin;            
             break;
         case 4:
             if (readin < 0 || readin > 1)ret = -EINVAL;
-            else data->st->pwr_rfhf_pwren = readin;  
+            else data->pwr_rfhf_pwren = readin;  
             break;
         case 5:
             if (readin < 0 || readin > 1)ret = -EINVAL;
-            else data->st->pwr_rflf_pwren = readin;
+            else data->pwr_rflf_pwren = readin;
             break;
         case 6:
             if (readin < 0 || readin > 1)ret = -EINVAL;
-            else data->st->pwr_adc_pdwn = readin;
+            else data->pwr_adc_pdwn = readin;
             break;
         default:
             ret = -EINVAL;
     }
 
 	if (!ret) {
-		regval |= REG_FIELD_WRITE(data->st->pwr_lna2_en ,GPIO_PWR_LNA2_EN_SHIFT,1);
-        regval |= REG_FIELD_WRITE(data->st->pwr_lfol_ce,GPIO_PWR_LFOL_CE_SHIFT,1);
-        regval |= REG_FIELD_WRITE(data->st->pwr_scol_ce,GPIO_PWR_SCOL_CE_SHIFT,1);
-		regval |= REG_FIELD_WRITE(data->st->pwr_intref_dis,GPIO_PWR_INTREF_DIS_SHIFT,1);
-		regval |= REG_FIELD_WRITE(data->st->pwr_rfhf_pwren,GPIO_PWR_RFHF_PWREN_SHIFT,1);
-		regval |= REG_FIELD_WRITE(data->st->pwr_rflf_pwren,GPIO_PWR_RFLF_PWREN_SHIFT,1);
-		regval |= REG_FIELD_WRITE(data->st->pwr_adc_pdwn,GPIO_PWR_ADC_PDWN_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->pwr_lna2_en ,GPIO_PWR_LNA2_EN_SHIFT,1);
+        regval |= REG_FIELD_WRITE(data->pwr_lfol_ce,GPIO_PWR_LFOL_CE_SHIFT,1);
+        regval |= REG_FIELD_WRITE(data->pwr_scol_ce,GPIO_PWR_SCOL_CE_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->pwr_intref_dis,GPIO_PWR_INTREF_DIS_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->pwr_rfhf_pwren,GPIO_PWR_RFHF_PWREN_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->pwr_rflf_pwren,GPIO_PWR_RFLF_PWREN_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->pwr_adc_pdwn,GPIO_PWR_ADC_PDWN_SHIFT,1);
 
 		i2c_smbus_write_byte_data(data->client,GPIO_PWR_ADDRESS,regval);
 	}
@@ -313,28 +321,38 @@ static ssize_t pwr_control_read(struct iio_dev *indio_dev,
 
 	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);
     int ret = 0;
+	char data_read;
+	i2c_smbus_write_byte(data->client,GPIO_PWR_ADDRESS);
+	data_read = i2c_smbus_read_byte(data->client);
     mutex_lock(&indio_dev->mlock);
     switch ((u32) private) {
 		case 0:
-			ret = sprintf(buf, "%s\n", data->st->pwr_lna2_en ? "Bypass" : "Enabled");
+			data->pwr_lna2_en = REG_FIELD_READ(data_read, GPIO_PWR_LNA2_EN_SHIFT , 1); 
+			ret = sprintf(buf, "%s\n", data->pwr_lna2_en ? "Enabled" : "Bypass" );
 			break;
         case 1:
-			ret = sprintf(buf, "%s\n", data->st->pwr_lfol_ce ? "Disabled" : "Enabled");
+			data->pwr_lfol_ce = REG_FIELD_READ(data_read, GPIO_PWR_LFOL_CE_SHIFT , 1); 
+			ret = sprintf(buf, "%s\n", data->pwr_lfol_ce ? "Enabled" : "Disabled" );
             break;
         case 2:
-            ret = sprintf(buf, "%s\n", data->st->pwr_scol_ce ? "Disabled" : "Enabled");
+			data->pwr_lfol_ce = REG_FIELD_READ(data_read, GPIO_PWR_SCOL_CE_SHIFT , 1); 
+            ret = sprintf(buf, "%s\n", data->pwr_scol_ce ? "Enabled" : "Disabled" );
             break;
         case 3:
-            ret = sprintf(buf, "%s\n", data->st->pwr_intref_dis ? "Disabled" : "Enabled");
+			data->pwr_intref_dis = REG_FIELD_READ(data_read, GPIO_PWR_INTREF_DIS_SHIFT , 1); 
+            ret = sprintf(buf, "%s\n", data->pwr_intref_dis ? "Enabled" :"Disabled" );
             break;
         case 4:
-            ret = sprintf(buf, "%s\n", data->st->pwr_rfhf_pwren ? "Disabled" : "Enabled");
+			data->pwr_rfhf_pwren = REG_FIELD_READ(data_read, GPIO_PWR_RFHF_PWREN_SHIFT , 1); 
+            ret = sprintf(buf, "%s\n", data->pwr_rfhf_pwren ? "Enabled" :"Disabled" );
             break;
         case 5:
-            ret = sprintf(buf, "%s\n", data->st->pwr_rflf_pwren ? "Disabled" : "Enabled");
+			data->pwr_rflf_pwren = REG_FIELD_READ(data_read, GPIO_PWR_RFLF_PWREN_SHIFT , 1); 
+            ret = sprintf(buf, "%s\n", data->pwr_rflf_pwren ? "Enabled" : "Disabled" );
             break;
         case 6:
-            ret = sprintf(buf, "%s\n", data->st->pwr_adc_pdwn ? "Power up" : "Power down");
+			data->pwr_adc_pdwn = REG_FIELD_READ(data_read, GPIO_PWR_ADC_PDWN_SHIFT , 1); 
+            ret = sprintf(buf, "%s\n", data->pwr_adc_pdwn ? "Power up" : "Power down");
             break;
         default:
             ret = -EINVAL;
@@ -362,24 +380,24 @@ static ssize_t sync_control_write(struct iio_dev *indio_dev,
 	switch ((u32) private) {
         case 0:
             if (readin < 0 || readin > 1) ret = -EINVAL;
-            else data->st->sync_pll_reset = readin;
+            else data->sync_pll_reset = readin;
             break;
         case 1:
             if (readin < 0 || readin > 1)ret = -EINVAL;
-            else data->st->sync_pll_sync = readin;
+            else data->sync_pll_sync = readin;
             break;
         case 2:
             if (readin < 0 || readin > 1)ret = -EINVAL;
-            else data->st->sync_adc_sync = readin;           
+            else data->sync_adc_sync = readin;           
             break;
         default:
             ret = -EINVAL;
     }
 
 	if (!ret) {
-		regval |= REG_FIELD_WRITE(data->st->sync_pll_reset,GPIO_SYNC_PLL_RESET_SHIFT,1);
-        regval |= REG_FIELD_WRITE(data->st->sync_pll_sync,GPIO_SYNC_PLL_SYNC_SHIFT,1);
-        regval |= REG_FIELD_WRITE(data->st->sync_adc_sync,GPIO_SYNC_ADC_SYNC_SHIFT,1);
+		regval |= REG_FIELD_WRITE(data->sync_pll_reset,GPIO_SYNC_PLL_RESET_SHIFT,1);
+        regval |= REG_FIELD_WRITE(data->sync_pll_sync,GPIO_SYNC_PLL_SYNC_SHIFT,1);
+        regval |= REG_FIELD_WRITE(data->sync_adc_sync,GPIO_SYNC_ADC_SYNC_SHIFT,1);
 
 		i2c_smbus_write_byte_data(data->client,GPIO_SYNC_ADDRESS,regval);
 	}
@@ -396,16 +414,22 @@ static ssize_t sync_control_read(struct iio_dev *indio_dev,
 
 	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);
     int ret = 0;
+	char data_read;
+	i2c_smbus_write_byte(data->client,GPIO_SYNC_ADDRESS);
+	data_read = i2c_smbus_read_byte(data->client);
     mutex_lock(&indio_dev->mlock);
     switch ((u32) private) {
 		case 0:
-			ret = sprintf(buf, "%s\n", data->st->sync_pll_reset ? "PLL on" : "Reset");
+			data->sync_pll_reset = REG_FIELD_READ(data_read, GPIO_SYNC_PLL_RESET_SHIFT , 1); 
+			ret = sprintf(buf, "%s\n", data->sync_pll_reset ? "Reset" : "PLL on" );
 			break;
         case 1:
-			ret = sprintf(buf, "%s\n", data->st->sync_pll_sync ? "Unused" : "Sync");
+			data->sync_pll_reset = REG_FIELD_READ(data_read, GPIO_SYNC_PLL_SYNC_SHIFT , 1); 
+			ret = sprintf(buf, "%s\n", data->sync_pll_sync ? "Sync" : "Unused" );
             break;
         case 2:
-            ret = sprintf(buf, "%s\n", data->st->sync_adc_sync ? "Unused" : "Sync");
+			data->sync_pll_reset = REG_FIELD_READ(data_read, GPIO_SYNC_ADC_SYNC_SHIFT , 1);
+            ret = sprintf(buf, "%s\n", data->sync_adc_sync ? "Sync" : "Unused" );
             break;
         default:
             ret = -EINVAL;
@@ -426,23 +450,21 @@ static ssize_t extio_control_write(struct iio_dev *indio_dev,
     unsigned char regval = 0;
 
     ret = kstrtoull(buf, 10, &readin);
-    if (ret)
-        return ret;
     mutex_lock(&indio_dev->mlock);
 
 	switch ((u32) private) {
         case 0:
             if (readin < 0 || readin > 7) ret = -EINVAL;
-            else data->st->extio= readin;
+            else data->extio= readin;
             break;
         default:
             ret = -EINVAL;
     }
 
-	if (!ret) {
-		regval |= REG_FIELD_WRITE(data->st->extio,GPIO_EXTIO_EXTIO_SHIFT,4);
-		i2c_smbus_write_byte_data(data->client,GPIO_EXTIO_ADDRESS,regval);
-	}
+
+	regval |= REG_FIELD_WRITE(data->extio,GPIO_EXTIO_EXTIO_SHIFT,4);
+	i2c_smbus_write_byte_data(data->client,GPIO_EXTIO_ADDRESS,regval);
+
 	mutex_unlock(&indio_dev->mlock);
 
 	return ret ? ret : len;
@@ -455,11 +477,16 @@ static ssize_t extio_control_read(struct iio_dev *indio_dev,
         char *buf) {
 
 	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);
-    int ret = 0;
+	int ret = 0;
+	char data_read;
+	i2c_smbus_write_byte(data->client,GPIO_EXTIO_ADDRESS);
+	data_read = i2c_smbus_read_byte(data->client);
     mutex_lock(&indio_dev->mlock);
+	data->extio = ret;
     switch ((u32) private) {
 		case 0:
-			ret = sprintf(buf, "%d\n", data->st->extio);
+			data->extio = data_read &0xF;
+			ret = sprintf(buf, "%d\n", data->extio);
 			break;
         default:
             ret = -EINVAL;
@@ -474,14 +501,15 @@ static ssize_t ga_read(struct iio_dev *indio_dev,
         char *buf) {
 
 	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);	
-	int ret = i2c_smbus_read_byte_data(data->client, GPIO_GA_ADDRESS);
-	if (ret < 0)
-		return ret;
+	int ret = 0;
+	char data_read;
+	i2c_smbus_write_byte(data->client,GPIO_GA_ADDRESS);
+	data_read = i2c_smbus_read_byte(data->client);
     mutex_lock(&indio_dev->mlock);
     switch ((u32) private) {
 		case 0:
-			data->st->ga_address = (unsigned int)ret;
-			ret = sprintf(buf, "%d\n", data->st->ga_address);
+			data->ga_address = data_read &0xF;
+			ret = sprintf(buf, "%d\n", data->ga_address);
 			break;
         default:
             ret = -EINVAL;
@@ -496,14 +524,15 @@ static ssize_t pll_sel_read(struct iio_dev *indio_dev,
         char *buf) {
 
 	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);	
-	int ret = i2c_smbus_read_byte_data(data->client, GPIO_PLL_SEL_ADDRESS);
-	if (ret < 0)
-		return ret;
+	char data_read;
+	int ret = 0;
+	i2c_smbus_write_byte(data->client,GPIO_PLL_SEL_ADDRESS);
+	data_read = i2c_smbus_read_byte(data->client);
     mutex_lock(&indio_dev->mlock);
     switch ((u32) private) {
 		case 0:
-			data->st->lmk04281_pll_sel = (unsigned int)ret;
-			ret = sprintf(buf, "%d\n", data->st->lmk04281_pll_sel);
+			data->lmk04281_pll_sel =  data_read &0x3;
+			ret = sprintf(buf, "%d\n", data->lmk04281_pll_sel);
 			break;
         default:
             ret = -EINVAL;
@@ -517,22 +546,29 @@ static ssize_t pwr_measure_read(struct iio_dev *indio_dev,
         const struct iio_chan_spec *chan,
         char *buf) {
 	int ret = 0;
+	char data_read;
 	struct i2c_cpld_bridge_data *data = iio_priv(indio_dev);	
     mutex_lock(&indio_dev->mlock);
     switch ((u32) private) {
 		case 0:
-			ret = i2c_smbus_read_byte_data(data->client, GPIO_RF_PWR_Ch0_MSB_ADDRESS);
-			ret <<= 8;
-			ret |= i2c_smbus_read_byte_data(data->client, GPIO_RF_PWR_Ch0_LSB_ADDRESS);
-			data->st->pwrMeanCh0 = (unsigned int)ret;
-			ret = sprintf(buf, "%d\n", data->st->pwrMeanCh0);
+		    i2c_smbus_write_byte(data->client,GPIO_RF_PWR_Ch0_MSB_ADDRESS);
+			data_read = i2c_smbus_read_byte(data->client);
+			ret <<= (data_read<<8);
+			i2c_smbus_write_byte(data->client,GPIO_RF_PWR_Ch0_LSB_ADDRESS);
+			data_read = i2c_smbus_read_byte(data->client);
+			ret |= data_read;
+			data->pwrMeanCh0 = (unsigned int)ret;
+			ret = sprintf(buf, "%d\n", data->pwrMeanCh0);
 			break;
 		case 1:
-			ret = i2c_smbus_read_byte_data(data->client, GPIO_RF_PWR_Ch1_MSB_ADDRESS);
-			ret <<= 8;
-			ret |= i2c_smbus_read_byte_data(data->client, GPIO_RF_PWR_Ch1_LSB_ADDRESS);
-			data->st->pwrMeanCh1 = (unsigned int)ret;
-			ret = sprintf(buf, "%d\n", data->st->pwrMeanCh1);
+		    i2c_smbus_write_byte(data->client,GPIO_RF_PWR_Ch1_MSB_ADDRESS);
+			data_read = i2c_smbus_read_byte(data->client);
+			ret <<= (data_read<<8);
+			i2c_smbus_write_byte(data->client,GPIO_RF_PWR_Ch1_LSB_ADDRESS);
+			data_read = i2c_smbus_read_byte(data->client);
+			ret |= data_read;
+			data->pwrMeanCh1 = (unsigned int)ret;
+			ret = sprintf(buf, "%d\n", data->pwrMeanCh1);
 			break;
         default:
             ret = -EINVAL;
@@ -647,6 +683,13 @@ static int i2c_cpld_bridge_probe(struct i2c_client *client,
 
 	struct iio_dev *indio_dev;
 	struct i2c_cpld_bridge_data *data;
+	unsigned char regval = 0;
+	//struct i2c_cpld_bridge_state *pstate; 
+
+	if (!i2c_check_functionality(client->adapter,
+				     I2C_FUNC_SMBUS_WRITE_BYTE |
+				     I2C_FUNC_SMBUS_READ_WORD_DATA))
+		return -ENODEV;
 
 	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*data));
 	if (!indio_dev)
@@ -655,17 +698,66 @@ static int i2c_cpld_bridge_probe(struct i2c_client *client,
 	data = iio_priv(indio_dev);
 	i2c_set_clientdata(client, indio_dev);
 	data->client = client;
+	data->devid = id->driver_data;
+
+	/*Init Defaults*/
+	data->rf_swol = 0;
+	data->rf_swband = 2;
+	data->rf_swsc = 0;
+	data->rf_swin = 0;
+	data->rf_swc = 1;
+	data->rf_iqlo_bsel = 1;
+
+	data->pwr_lna2_en = 0;
+	data->pwr_lfol_ce = 0;
+	data->pwr_scol_ce = 0;
+	data->pwr_intref_dis = 1;
+	data->pwr_rfhf_pwren = 0;
+	data->pwr_rflf_pwren = 0;
+	data->pwr_adc_pdwn = 0;
+
+	data->sync_pll_reset = 0;
+	data->sync_pll_sync = 0;
+	data->sync_adc_sync = 0;
+
+	data->extio = 3;
+
 	mutex_init(&data->lock);
 
 	indio_dev->dev.parent = &client->dev;
-	indio_dev->name = id->name;
+	indio_dev->name = client->name;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->info = &i2c_cpld_bridge_info;
 
 	indio_dev->channels = i2c_cpld_bridge_chan;
 	indio_dev->num_channels = ARRAY_SIZE(i2c_cpld_bridge_chan);
 
-	return 0;
+	/*Configure Defaults */
+	regval |= REG_FIELD_WRITE(data->rf_swol,0,1);
+    regval |= REG_FIELD_WRITE(data->rf_swband,GPIO_RF_SWBAND_SHIFT,2);
+    regval |= REG_FIELD_WRITE(data->rf_swsc,GPIO_RF_SWSC_SHIFT,1);
+	regval |= REG_FIELD_WRITE(data->rf_swin,GPIO_RF_SWIN_SHIFT,1);
+	regval |= REG_FIELD_WRITE(data->rf_swc,GPIO_RF_SWC_SHIFT,1);
+	regval |= REG_FIELD_WRITE(data->rf_iqlo_bsel,GPIO_RF_IQLO_BSEL_SHIFT,2);
+	i2c_smbus_write_byte_data(data->client,GPIO_RF_ADDRESS,regval);
+
+	regval |= REG_FIELD_WRITE(data->pwr_lna2_en ,GPIO_PWR_LNA2_EN_SHIFT,1);
+    regval |= REG_FIELD_WRITE(data->pwr_lfol_ce,GPIO_PWR_LFOL_CE_SHIFT,1);
+    regval |= REG_FIELD_WRITE(data->pwr_scol_ce,GPIO_PWR_SCOL_CE_SHIFT,1);
+	regval |= REG_FIELD_WRITE(data->pwr_intref_dis,GPIO_PWR_INTREF_DIS_SHIFT,1);
+	regval |= REG_FIELD_WRITE(data->pwr_rfhf_pwren,GPIO_PWR_RFHF_PWREN_SHIFT,1);
+	regval |= REG_FIELD_WRITE(data->pwr_rflf_pwren,GPIO_PWR_RFLF_PWREN_SHIFT,1);
+	regval |= REG_FIELD_WRITE(data->pwr_adc_pdwn,GPIO_PWR_ADC_PDWN_SHIFT,1);
+	i2c_smbus_write_byte_data(data->client,GPIO_PWR_ADDRESS,regval);
+
+	regval |= REG_FIELD_WRITE(data->sync_pll_reset,GPIO_SYNC_PLL_RESET_SHIFT,1);
+    regval |= REG_FIELD_WRITE(data->sync_pll_sync,GPIO_SYNC_PLL_SYNC_SHIFT,1);
+    regval |= REG_FIELD_WRITE(data->sync_adc_sync,GPIO_SYNC_ADC_SYNC_SHIFT,1);
+	i2c_smbus_write_byte_data(data->client,GPIO_SYNC_ADDRESS,regval);
+
+	i2c_smbus_write_byte_data(data->client,GPIO_EXTIO_ADDRESS,data->extio);
+
+	return devm_iio_device_register(&client->dev, indio_dev);
 }
 
 static int i2c_cpld_bridge_remove(struct i2c_client *client) {
